@@ -1,0 +1,54 @@
+{
+  "project_info": {
+    "project_number": "789283848967",
+    "project_id": "mahjong-nanikiru-archive",
+    "storage_bucket": "mahjong-nanikiru-archive.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:789283848967:android:3736811042c1d31d6e7ba2",
+        "android_client_info": {
+          "package_name": "com.example.zari_mahjong_lab"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "789283848967-qdh5q37moa7a07m0go156mtqfm3bqvpi.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.zari_mahjong_lab",
+            "certificate_hash": "24560340a936515096fb0d6332e0cae82bf3fee7"
+          }
+        },
+        {
+          "client_id": "789283848967-sco4vo9iq20t9p7k75pf16hj8urpbhpm.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD6-Bmb7hZAZqQM0bTyAAfVWt9Jse4eRyQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "789283848967-sco4vo9iq20t9p7k75pf16hj8urpbhpm.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "789283848967-eusuob57nqpu2a9tlgktnc3r52uhaedo.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.zariMahjongLab"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

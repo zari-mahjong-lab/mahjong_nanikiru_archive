@@ -1,0 +1,56 @@
+name: zari_mahjong_lab
+description: "A new Flutter project."
+publish_to: "none"
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.8.1
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # UI
+  cupertino_icons: ^1.0.8
+  google_fonts: ^6.2.1
+
+  # Core / Firebase
+  firebase_core: ^2.29.0
+  firebase_auth: ^4.19.6
+  cloud_firestore: ^4.17.5
+  firebase_storage: ^11.7.7
+
+  # Auth providers
+  google_sign_in: ^6.2.1
+  sign_in_with_apple: ^6.1.0   # iOS/macOS 用（iOS 13+ 必須）
+
+  # State / Utils
+  provider: ^6.1.2
+  collection: ^1.18.0
+
+  # Media / Image
+  image: ^4.2.0
+  image_picker: ^1.1.2
+
+  # SE 再生
+  audioplayers: ^5.2.1
+  firebase_app_check: ^0.2.2+7
+
+  http: ^1.1.0
+  http_parser: ^4.0.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/tiles/
+    - assets/images/background.png
+    - assets/images/logo.png
+    - assets/sounds/cyber_start.mp3
+    - assets/sounds/cyber_click.mp3
