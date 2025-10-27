@@ -1,4 +1,4 @@
-# zari_mahjong_lab
+# mahjong_nanikiru_archive
 
 A new Flutter project.
 
