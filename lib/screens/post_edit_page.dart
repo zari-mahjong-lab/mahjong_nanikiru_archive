@@ -724,7 +724,7 @@ class _PostEditPageState extends State<PostEditPage> {
                       maxLines: 3,
                       style: const TextStyle(color: Colors.white),
                       decoration: _inputDecoration(
-                        '例：天鳳ルール、南3局 親 2着目 リーチ判断に迷った など（200文字以内）',
+                        '例：ラス回避ルール、1-3 チップ5000点相当、一発裏無し など（200文字以内）',
                       ),
                     ),
 
@@ -932,7 +932,7 @@ class _PostEditPageState extends State<PostEditPage> {
                       maxLines: 2,
                       style: const TextStyle(color: Colors.white),
                       decoration: _inputDecoration(
-                        '例：巡目的に押しきるべきと判断した（200文字以内）',
+                        '例：受け入れ枚数では劣るが打点差が大きく、局収支期待値では勝ると判断した など（200文字以内）',
                       ),
                     ),
 

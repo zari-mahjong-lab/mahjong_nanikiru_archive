@@ -1,3 +1,4 @@
+// lib/screens/my_page.dart
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:audioplayers/audioplayers.dart';
@@ -12,8 +13,16 @@ import '../screens/profile_edit_page.dart';
 import '../screens/login_selection_page.dart';
 import '../screens/title_page.dart';
 
+/// 無アニメーションの共通ルート
+Route<T> _noAnimRoute<T>(Widget page) => PageRouteBuilder<T>(
+  pageBuilder: (_a, _b, _c) => page,
+  transitionDuration: Duration.zero,
+  reverseTransitionDuration: Duration.zero,
+  transitionsBuilder: (_a, _b, _c, child) => child,
+);
+
 class MyPage extends StatefulWidget {
-  const MyPage({Key? key}) : super(key: key);
+  const MyPage({super.key});
   @override
   State<MyPage> createState() => _MyPageState();
 }
@@ -25,19 +34,50 @@ class _MyPageState extends State<MyPage> {
     await player.play(AssetSource('sounds/cyber_click.mp3'));
   }
 
-  void _navigateToDetail(
-    BuildContext context,
-    String postId,
-    AudioPlayer player,
-  ) async {
-    await _playSE(player);
-    Navigator.push(
-      context,
-      PageRouteBuilder(
-        pageBuilder: (_, __, ___) =>
-            DetailPage(postId: postId, source: 'mypage', currentIndex: 2),
-        transitionDuration: Duration.zero,
-        reverseTransitionDuration: Duration.zero,
+  // ★ HomePage と同じテイストの「ページ全体ローディング」
+  Widget _buildFullPageLoading() {
+    return Container(
+      decoration: const BoxDecoration(
+        image: DecorationImage(
+          image: AssetImage('assets/images/background.png'),
+          fit: BoxFit.cover,
+        ),
+      ),
+      child: const Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator(
+              valueColor: AlwaysStoppedAnimation<Color>(Colors.cyanAccent),
+            ),
+            SizedBox(height: 16),
+            Text('Now Loading...', style: TextStyle(color: Colors.cyanAccent)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ★ エラー時もページ全体で表示
+  Widget _buildErrorPage(String message) {
+    return Container(
+      margin: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            Colors.cyan.withOpacity(0.15),
+            Colors.black.withOpacity(0.6),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        border: Border.all(color: Colors.cyanAccent, width: 1.5),
+      ),
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(message, style: const TextStyle(color: Colors.redAccent)),
+        ),
       ),
     );
   }
@@ -47,6 +87,8 @@ class _MyPageState extends State<MyPage> {
     AudioPlayer player,
   ) async {
     await _playSE(player);
+    if (!mounted) return;
+
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -72,10 +114,12 @@ class _MyPageState extends State<MyPage> {
     );
 
     if (confirmed == true) {
+      if (!mounted) return;
       context.read<GuestProvider>().setGuest(false);
+      if (!mounted) return;
       Navigator.pushAndRemoveUntil(
         context,
-        MaterialPageRoute(builder: (_) => const LoginSelectionPage()),
+        _noAnimRoute(const LoginSelectionPage()),
         (_) => false,
       );
     }
@@ -87,6 +131,7 @@ class _MyPageState extends State<MyPage> {
     final user = FirebaseAuth.instance.currentUser;
     final player = AudioPlayer();
 
+    // ゲストモード時はこれまでどおり即表示
     if (isGuest || user == null) {
       return BaseScaffold(
         title: 'マイページ',
@@ -134,14 +179,30 @@ class _MyPageState extends State<MyPage> {
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
       stream: docStream,
       builder: (context, snap) {
-        final nickname =
-            (snap.data?.data()?['nickname'] as String?) ??
-            (user.displayName ?? 'ユーザー');
-        final iconUrl =
-            (snap.data?.data()?['iconUrl'] as String?) ?? user.photoURL;
+        // ★ ここでページ単位ローディングを挟む
+        if (snap.connectionState == ConnectionState.waiting) {
+          return BaseScaffold(
+            title: 'マイページ',
+            currentIndex: 2,
+            body: _buildFullPageLoading(),
+          );
+        }
+        if (snap.hasError) {
+          return BaseScaffold(
+            title: 'マイページ',
+            currentIndex: 2,
+            body: _buildErrorPage('読み込みエラー: ${snap.error}'),
+          );
+        }
 
-        final affiliationsRaw =
-            (snap.data?.data()?['affiliations'] as List?) ?? const [];
+        // ここから先は「ユーザードキュメントが取れてから」だけ実行される
+        final data = snap.data?.data() ?? const <String, dynamic>{};
+        final nickname =
+            (data['nickname'] as String?) ?? (user.displayName ?? 'ユーザー');
+        final iconUrl = (data['iconUrl'] as String?) ?? user.photoURL;
+        final isPremium = (data['isPremium'] as bool?) ?? false;
+
+        final affiliationsRaw = (data['affiliations'] as List?) ?? const [];
         final affiliations = affiliationsRaw
             .whereType<Map>()
             .map(
@@ -152,17 +213,59 @@ class _MyPageState extends State<MyPage> {
             )
             .toList();
 
+        // MyPage._MyPageState 内の setPremiumDebug
+        Future<void> setPremiumDebug(bool v) async {
+          try {
+            // ignore: unawaited_futures
+            player.play(AssetSource('sounds/cyber_click.mp3'));
+          } catch (_) {}
+
+          final doc = FirebaseFirestore.instance.collection('users').doc(uid);
+
+          try {
+            if (v) {
+              await doc.set({
+                'isPremium': true,
+                'premiumActivatedAt': FieldValue.serverTimestamp(),
+                'premiumDebug': true,
+              }, SetOptions(merge: true));
+            } else {
+              await doc.set({
+                'isPremium': false,
+                'premiumDebug': true,
+              }, SetOptions(merge: true));
+              await doc.update({'premiumActivatedAt': FieldValue.delete()});
+            }
+
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(v ? 'プレミアムを有効化（テスト）' : 'プレミアムを無効化（テスト）')),
+            );
+          } on FirebaseException catch (e) {
+            if (!mounted) return;
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(SnackBar(content: Text('書き込み失敗: ${e.code}')));
+          } catch (e) {
+            if (!mounted) return;
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(SnackBar(content: Text('書き込み失敗: $e')));
+          }
+        }
+
         return BaseScaffold(
           title: 'マイページ',
           currentIndex: 2,
           body: Center(
             child: SingleChildScrollView(
-              controller: _parentScroll, // ★ 追加
-              primary: false, // ★ 変更
+              controller: _parentScroll,
+              primary: false,
               padding: const EdgeInsets.all(16.0),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
+                  // アイコン・名前・プレミアムバッジ
                   CircleAvatar(
                     radius: 48,
                     backgroundColor: Colors.cyanAccent,
@@ -178,28 +281,66 @@ class _MyPageState extends State<MyPage> {
                         : null,
                   ),
                   const SizedBox(height: 12),
-                  Text(
-                    nickname,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                    ),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        nickname,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      if (isPremium) ...[
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.cyanAccent),
+                            color: Colors.cyanAccent.withValues(alpha: 0.15),
+                          ),
+                          child: const Row(
+                            children: [
+                              Icon(
+                                Icons.workspace_premium,
+                                size: 16,
+                                color: Colors.cyanAccent,
+                              ),
+                              SizedBox(width: 4),
+                              Text(
+                                'PREMIUM',
+                                style: TextStyle(
+                                  color: Colors.cyanAccent,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
+
                   const SizedBox(height: 16),
-                  if (affiliations.isNotEmpty) _affiliationsBox(affiliations),
+                  if (affiliations.isNotEmpty)
+                    _AffiliationsBox(affiliations: affiliations),
+
                   const SizedBox(height: 16),
 
+                  // アカウント編集
                   ElevatedButton.icon(
                     onPressed: () async {
                       await _playSE(player);
+                      if (!mounted) return;
                       Navigator.push(
                         context,
-                        PageRouteBuilder(
-                          pageBuilder: (_, __, ___) => const ProfileEditPage(),
-                          transitionDuration: Duration.zero,
-                          reverseTransitionDuration: Duration.zero,
-                        ),
+                        _noAnimRoute(const ProfileEditPage()),
                       );
                     },
                     icon: const Icon(Icons.edit),
@@ -212,11 +353,24 @@ class _MyPageState extends State<MyPage> {
 
                   const SizedBox(height: 24),
 
-                  // 投稿お気に入り数/回答いいね数（前に作った _LikesStatsRow を再利用）
-                  _LikesStatsRow(uid: uid),
+                  // ====== 課金ボタン（エミュ用の疑似動作） ======
+                  _PremiumCardDebug(
+                    isPremium: isPremium,
+                    onActivate: () => setPremiumDebug(true),
+                    onDeactivate: () => setPremiumDebug(false),
+                  ),
+
+                  const SizedBox(height: 24),
+
+                  // ====== （非課金時は非表示）投稿お気に入り数 / 回答いいね数 ======
+                  if (isPremium)
+                    _LikesStatsRow(uid: uid)
+                  else
+                    const _LockedNotice(title: '投稿お気に入り数・回答いいね数（プレミアム限定）'),
 
                   const SizedBox(height: 32),
 
+                  // お気に入り問題
                   const Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
@@ -230,8 +384,6 @@ class _MyPageState extends State<MyPage> {
                     ),
                   ),
                   const SizedBox(height: 12),
-
-                  // お気に入り
                   _FavoritePostsList(
                     uid: uid,
                     player: player,
@@ -240,6 +392,7 @@ class _MyPageState extends State<MyPage> {
 
                   const SizedBox(height: 32),
 
+                  // 投稿履歴
                   const Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
@@ -253,22 +406,28 @@ class _MyPageState extends State<MyPage> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  _MyPostHistoryList(
-                    uid: uid,
-                    player: player,
-                    parent: _parentScroll,
-                  ),
+                  if (isPremium)
+                    _MyPostHistoryList(
+                      uid: uid,
+                      player: player,
+                      parent: _parentScroll,
+                    )
+                  else
+                    const _LockedNotice(title: '投稿履歴（プレミアム限定）'),
 
                   const SizedBox(height: 32),
 
+                  // ログアウト
                   ElevatedButton.icon(
                     onPressed: () async {
                       await _playSE(player);
                       await FirebaseAuth.instance.signOut();
+                      if (!mounted) return;
                       context.read<GuestProvider>().setGuest(false);
+                      if (!mounted) return;
                       Navigator.pushAndRemoveUntil(
                         context,
-                        MaterialPageRoute(builder: (_) => const TitlePage()),
+                        _noAnimRoute(const TitlePage()),
                         (_) => false,
                       );
                     },
@@ -295,11 +454,185 @@ class _MyPageState extends State<MyPage> {
   }
 }
 
+// ===== 課金カード（デバッグ用）=====
+class _PremiumCardDebug extends StatelessWidget {
+  final bool isPremium;
+  final VoidCallback onActivate;
+  final VoidCallback onDeactivate;
+  const _PremiumCardDebug({
+    required this.isPremium,
+    required this.onActivate,
+    required this.onDeactivate,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 560),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.30),
+        border: Border.all(color: Colors.cyanAccent, width: 1.5),
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x8020FFFF),
+            blurRadius: 14,
+            spreadRadius: 0.5,
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.workspace_premium, color: Colors.cyanAccent),
+              SizedBox(width: 8),
+              Text(
+                'プレミアム会員（テスト切替）',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            isPremium
+                ? '現在：プレミアムが有効です。全機能をご利用いただけます。'
+                : '現在：無料プランです。下記ボタンでテスト的にプレミアムを有効化できます。',
+            style: const TextStyle(color: Colors.white70),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              if (!isPremium)
+                ElevatedButton.icon(
+                  onPressed: onActivate,
+                  icon: const Icon(Icons.lock_open),
+                  label: const Text('プレミアムを有効化（テスト）'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.cyanAccent,
+                    foregroundColor: Colors.black,
+                  ),
+                ),
+              if (isPremium)
+                OutlinedButton.icon(
+                  onPressed: onDeactivate,
+                  icon: const Icon(Icons.lock_reset, color: Colors.cyanAccent),
+                  label: const Text('プレミアムを無効化（テスト）'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.cyanAccent,
+                    side: const BorderSide(
+                      color: Colors.cyanAccent,
+                      width: 1.4,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ===== ロック表示（非課金時に見せる置き換えUI）=====
+class _LockedNotice extends StatelessWidget {
+  final String title;
+  const _LockedNotice({required this.title});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 560),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.30),
+        border: Border.all(color: Colors.cyanAccent, width: 1.2),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.lock, color: Colors.cyanAccent),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              title,
+              style: const TextStyle(
+                color: Colors.white70,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          const Text('Premium', style: TextStyle(color: Colors.cyanAccent)),
+        ],
+      ),
+    );
+  }
+}
+
+// ===== 所属ボックス =====
+class _AffiliationsBox extends StatelessWidget {
+  final List<Map<String, String>> affiliations;
+  const _AffiliationsBox({required this.affiliations});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.3),
+        border: Border.all(color: Colors.cyanAccent, width: 1.5),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '所属：',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 14,
+              fontWeight: FontWeight.bold,
+              shadows: [Shadow(color: Colors.cyan, blurRadius: 6)],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: affiliations
+                .map(
+                  (e) => Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Text(
+                      '${e['affiliation']}  ${e['rank']}',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        shadows: [Shadow(color: Colors.cyan, blurRadius: 6)],
+                      ),
+                    ),
+                  ),
+                )
+                .toList(),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 // ===== お気に入り一覧 =====
 class _FavoritePostsList extends StatelessWidget {
   final String uid;
   final AudioPlayer player;
-  final ScrollController parent; // ★ 追加
+  final ScrollController parent;
   const _FavoritePostsList({
     required this.uid,
     required this.player,
@@ -333,9 +666,8 @@ class _FavoritePostsList extends StatelessWidget {
           );
         }
 
-        // Firestore の whereIn は 10 件まで → 10件ずつ分割取得
         Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>>
-        _fetchPosts() async {
+        fetchPosts() async {
           final db = FirebaseFirestore.instance;
           final List<QueryDocumentSnapshot<Map<String, dynamic>>> all = [];
           for (var i = 0; i < postIds.length; i += 10) {
@@ -346,7 +678,6 @@ class _FavoritePostsList extends StatelessWidget {
                 .get();
             all.addAll(qs.docs);
           }
-          // createdAt 降順
           all.sort((a, b) {
             final ta = a.data()['createdAt'];
             final tb = b.data()['createdAt'];
@@ -358,18 +689,20 @@ class _FavoritePostsList extends StatelessWidget {
         }
 
         return FutureBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
-          future: _fetchPosts(),
+          future: fetchPosts(),
           builder: (context, postSnap) {
             if (!postSnap.hasData) {
               return const Center(child: CircularProgressIndicator());
             }
             final posts = postSnap.data!;
+            // navIds（お気に入り一覧の並び順）
+            final navIds = posts.map((d) => d.id).toList();
 
             return Container(
-              height: 360, // 固定
+              height: 360,
               padding: const EdgeInsets.symmetric(vertical: 8),
               decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.30),
+                color: Colors.black.withValues(alpha: 0.30),
                 border: Border.all(color: Colors.cyanAccent, width: 1.5),
                 borderRadius: BorderRadius.zero,
               ),
@@ -393,7 +726,6 @@ class _FavoritePostsList extends StatelessWidget {
                     }
                     return false;
                   },
-
                   child: ListView.separated(
                     primary: false,
                     physics: const ClampingScrollPhysics(
@@ -401,7 +733,7 @@ class _FavoritePostsList extends StatelessWidget {
                     ),
                     padding: EdgeInsets.zero,
                     itemCount: posts.length,
-                    separatorBuilder: (_, __) => const Divider(
+                    separatorBuilder: (_a, _b) => const Divider(
                       color: Colors.cyanAccent,
                       height: 1,
                       thickness: 1,
@@ -415,24 +747,21 @@ class _FavoritePostsList extends StatelessWidget {
                       final postType = (p['postType'] ?? '') as String;
                       final postUserId = (p['userId'] ?? '') as String;
 
-                      // 🔹 追加：表示用の副露配列
                       final meldDisplayGroups = _readMeldDisplayGroups(p);
 
                       return InkWell(
-                        onTap: () async {
-                          await player.play(
-                            AssetSource('sounds/cyber_click.mp3'),
-                          );
+                        onTap: () {
+                          player.play(AssetSource('sounds/cyber_click.mp3'));
                           Navigator.push(
                             context,
-                            PageRouteBuilder(
-                              pageBuilder: (_, __, ___) => DetailPage(
+                            _noAnimRoute(
+                              DetailPage(
                                 postId: posts[i].id,
                                 source: 'mypage',
-                                currentIndex: 2,
+                                currentIndex: 2, // BottomNav: MyPage
+                                navIds: navIds,
+                                navIndex: i,
                               ),
-                              transitionDuration: Duration.zero,
-                              reverseTransitionDuration: Duration.zero,
                             ),
                           );
                         },
@@ -444,12 +773,10 @@ class _FavoritePostsList extends StatelessWidget {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              // 手牌（横幅いっぱい）
                               _TileStrip(
                                 tiles: tiles,
                                 meldGroups: meldDisplayGroups,
                               ),
-
                               const SizedBox(height: 8),
                               Text(
                                 '$ruleType / $postType',
@@ -535,8 +862,8 @@ List<List<String>> _readMeldDisplayGroups(Map<String, dynamic> data) {
             (g['displayTiles'] as List? ?? g['tiles'] as List? ?? const [])
                 .map((e) => e?.toString() ?? '')
                 .where((e) => e.isNotEmpty)
-                .toList()
-                .cast<String>();
+                .cast<String>()
+                .toList();
         if (disp.isNotEmpty) out.add(disp);
       }
     }
@@ -557,13 +884,12 @@ class _TileStrip extends StatelessWidget {
   Widget build(BuildContext context) {
     final allGroups = meldGroups ?? [];
 
-    // 1つのRowに「手牌」＋「副露」を連結して表示
     return LayoutBuilder(
       builder: (context, c) {
         final totalTiles =
             tiles.length +
-            allGroups.fold<int>(0, (sum, g) => sum + g.length) +
-            (allGroups.isEmpty ? 0 : allGroups.length - 1); // 副露間のスペース考慮
+            allGroups.fold<int>(0, (acc, g) => acc + g.length) +
+            (allGroups.isEmpty ? 0 : allGroups.length - 1);
 
         final tileW = c.maxWidth / totalTiles;
         final tileH = tileW * 1.5;
@@ -574,21 +900,14 @@ class _TileStrip extends StatelessWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              // 🔹 手牌
-              ...tiles.map((id) => _buildTile(id, tileW, tileH)).toList(),
-
-              // 🔹 副露（間にちょっとスペース）
+              ...tiles.map((id) => _buildTile(id, tileW, tileH)),
               ...allGroups.asMap().entries.expand((entry) {
                 final gi = entry.key;
                 final g = entry.value;
                 final list = <Widget>[];
-
-                // 副露の前に少し間隔を空ける
                 if (gi > 0 || tiles.isNotEmpty) {
                   list.add(SizedBox(width: tileW * 0.3));
                 }
-
-                // グループ内の各牌
                 list.addAll(
                   g.map((id) => _buildTile(id, tileW * 0.9, tileH * 0.9)),
                 );
@@ -601,16 +920,15 @@ class _TileStrip extends StatelessWidget {
     );
   }
 
-  /// 個々の牌Widget生成（0.pngも通常牌と同じ扱い）
   Widget _buildTile(String id, double w, double h) {
-    final assetId = (id == '0') ? '0' : id; // 0 は assets/tiles/0.png を使う
+    final assetId = (id == '0') ? '0' : id;
     return SizedBox(
       width: w,
       height: h,
       child: Image.asset(
         _asset(assetId),
         fit: BoxFit.contain,
-        errorBuilder: (_, __, ___) => Center(
+        errorBuilder: (_c, _d, _e) => Center(
           child: Text(assetId, style: const TextStyle(color: Colors.white)),
         ),
       ),
@@ -709,56 +1027,11 @@ class _StatBlock extends StatelessWidget {
   }
 }
 
-Widget _affiliationsBox(List<Map<String, String>> affiliations) {
-  return Container(
-    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-    decoration: BoxDecoration(
-      color: Colors.black.withOpacity(0.3),
-      border: Border.all(color: Colors.cyanAccent, width: 1.5),
-    ),
-    child: Row(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          '所属：',
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: 14,
-            fontWeight: FontWeight.bold,
-            shadows: [Shadow(color: Colors.cyan, blurRadius: 6)],
-          ),
-        ),
-        const SizedBox(width: 8),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: affiliations
-              .map(
-                (e) => Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
-                  child: Text(
-                    '${e['affiliation']}  ${e['rank']}',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 14,
-                      fontWeight: FontWeight.bold,
-                      shadows: [Shadow(color: Colors.cyan, blurRadius: 6)],
-                    ),
-                  ),
-                ),
-              )
-              .toList(),
-        ),
-      ],
-    ),
-  );
-}
-
 // ===== 自分の投稿履歴（myPosts配列を参照） =====
 class _MyPostHistoryList extends StatelessWidget {
   final String uid;
   final AudioPlayer player;
-  final ScrollController parent; // ★ 追加
+  final ScrollController parent;
   const _MyPostHistoryList({
     required this.uid,
     required this.player,
@@ -798,13 +1071,11 @@ class _MyPostHistoryList extends StatelessWidget {
     final userRef = db.collection('users').doc(uid);
 
     try {
-      // まず投稿ドキュメントを取得（画像のURL/Path を読むため）
       final snap = await postRef.get();
       final data = snap.data();
       final String? imagePath = (data?['imagePath'] as String?);
       final String? imageUrl = (data?['imageUrl'] as String?);
 
-      // answers サブコレ削除（バッチ分割）
       QuerySnapshot<Map<String, dynamic>> ans;
       do {
         ans = await postRef.collection('answers').limit(400).get();
@@ -816,18 +1087,14 @@ class _MyPostHistoryList extends StatelessWidget {
         await batch.commit();
       } while (ans.docs.isNotEmpty);
 
-      // Storage の画像を削除（imagePath 優先。なければ imageUrl から ref を復元）
       try {
         if (imagePath != null && imagePath.isNotEmpty) {
           await storage.ref(imagePath).delete();
         } else if (imageUrl != null && imageUrl.isNotEmpty) {
           await storage.refFromURL(imageUrl).delete();
         }
-      } catch (_) {
-        // 画像が既に無い等は無視（投稿本体の削除は続行）
-      }
+      } catch (_) {}
 
-      // 本体削除 + myPosts から除外
       final batch = db.batch();
       batch.delete(postRef);
       batch.set(userRef, {
@@ -872,9 +1139,8 @@ class _MyPostHistoryList extends StatelessWidget {
           );
         }
 
-        // Firestore whereIn は 10 件まで → チャンクして取得
         Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>>
-        _fetchPosts() async {
+        fetchPosts() async {
           final db = FirebaseFirestore.instance;
           final List<QueryDocumentSnapshot<Map<String, dynamic>>> all = [];
           for (var i = 0; i < myPosts.length; i += 10) {
@@ -885,7 +1151,6 @@ class _MyPostHistoryList extends StatelessWidget {
                 .get();
             all.addAll(qs.docs);
           }
-          // createdAt 降順
           all.sort((a, b) {
             final ta = a.data()['createdAt'];
             final tb = b.data()['createdAt'];
@@ -897,18 +1162,20 @@ class _MyPostHistoryList extends StatelessWidget {
         }
 
         return FutureBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
-          future: _fetchPosts(),
+          future: fetchPosts(),
           builder: (context, postSnap) {
             if (!postSnap.hasData) {
               return const Center(child: CircularProgressIndicator());
             }
             final posts = postSnap.data!;
+            // 自分の投稿履歴の navIds
+            final navIds = posts.map((d) => d.id).toList();
 
             return Container(
-              height: 360, // 固定
+              height: 360,
               padding: const EdgeInsets.symmetric(vertical: 8),
               decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.30),
+                color: Colors.black.withValues(alpha: 0.30),
                 border: Border.all(color: Colors.cyanAccent, width: 1.5),
                 borderRadius: BorderRadius.zero,
               ),
@@ -932,7 +1199,6 @@ class _MyPostHistoryList extends StatelessWidget {
                     }
                     return false;
                   },
-
                   child: ListView.separated(
                     primary: false,
                     physics: const ClampingScrollPhysics(
@@ -940,7 +1206,7 @@ class _MyPostHistoryList extends StatelessWidget {
                     ),
                     padding: EdgeInsets.zero,
                     itemCount: posts.length,
-                    separatorBuilder: (_, __) => const Divider(
+                    separatorBuilder: (_a, _b) => const Divider(
                       color: Colors.cyanAccent,
                       height: 1,
                       thickness: 1,
@@ -954,7 +1220,6 @@ class _MyPostHistoryList extends StatelessWidget {
                       final postType = (p['postType'] ?? '') as String;
                       final postId = posts[i].id;
 
-                      // 🔹 追加：表示用の副露配列
                       final meldDisplayGroups = _readMeldDisplayGroups(p);
 
                       return Padding(
@@ -964,8 +1229,7 @@ class _MyPostHistoryList extends StatelessWidget {
                         ),
                         child: LayoutBuilder(
                           builder: (context, bc) {
-                            // 🔽 ここだけ差し替え
-                            const reservedForIcon = 32.0; // アイコン用の固定幅
+                            const reservedForIcon = 32.0;
                             final tilesCount = tiles.length.clamp(1, 14);
                             final tileW =
                                 (bc.maxWidth - reservedForIcon) / tilesCount;
@@ -974,25 +1238,22 @@ class _MyPostHistoryList extends StatelessWidget {
                             return Row(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                // 左：牌画像（手牌＋副露）
                                 Expanded(
                                   child: InkWell(
-                                    onTap: () async {
-                                      await player.play(
+                                    onTap: () {
+                                      player.play(
                                         AssetSource('sounds/cyber_click.mp3'),
                                       );
                                       Navigator.push(
                                         context,
-                                        PageRouteBuilder(
-                                          pageBuilder: (_, __, ___) =>
-                                              DetailPage(
-                                                postId: postId,
-                                                source: 'mypage',
-                                                currentIndex: 2,
-                                              ),
-                                          transitionDuration: Duration.zero,
-                                          reverseTransitionDuration:
-                                              Duration.zero,
+                                        _noAnimRoute(
+                                          DetailPage(
+                                            postId: postId,
+                                            source: 'mypage',
+                                            currentIndex: 2,
+                                            navIds: navIds,
+                                            navIndex: i,
+                                          ),
                                         ),
                                       );
                                     },
@@ -1016,23 +1277,21 @@ class _MyPostHistoryList extends StatelessWidget {
                                     ),
                                   ),
                                 ),
-
-                                // 右：削除ボタン（少し大きく・上寄せ・左余白なし）
                                 SizedBox(
                                   width: reservedForIcon,
-                                  height: tileH, // 行の高さに合わせる
+                                  height: tileH,
                                   child: Align(
-                                    alignment: Alignment.topCenter, // 🔹 上寄せ
+                                    alignment: Alignment.topCenter,
                                     child: IconButton(
-                                      padding: EdgeInsets.zero, // 🔹 左余白なし
+                                      padding: EdgeInsets.zero,
                                       constraints: const BoxConstraints(
                                         minWidth: 36,
                                         minHeight: 36,
                                         maxWidth: 36,
                                         maxHeight: 36,
                                       ),
-                                      iconSize: 26, // 🔹 少し大きく
-                                      splashRadius: 22, // 🔹 タップ領域も少し拡大
+                                      iconSize: 26,
+                                      splashRadius: 22,
                                       icon: const Icon(
                                         Icons.delete,
                                         color: Colors.redAccent,

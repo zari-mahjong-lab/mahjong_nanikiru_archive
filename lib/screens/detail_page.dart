@@ -1,23 +1,53 @@
-// detail_page.dart
 import 'dart:math' as math;
+import 'dart:async'; // ← StreamSubscription 用
 import 'package:flutter/material.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
+import 'package:shared_preferences/shared_preferences.dart'; // ← 3投稿ごとの広告カウント用
 
 import '../widgets/base_scaffold.dart';
+
+// ===== Mini profile (トップレベル) =====
+class _MiniProfile {
+  final String? nickname;
+  final List<Map<String, dynamic>>? affiliations;
+
+  _MiniProfile({this.nickname, this.affiliations});
+
+  factory _MiniProfile.fromMap(Map<String, dynamic> map) => _MiniProfile(
+    nickname: map['nickname'] as String?,
+    affiliations: map['affiliations'] == null
+        ? null
+        : List<Map<String, dynamic>>.from(
+            (map['affiliations'] as List).map(
+              (e) => Map<String, dynamic>.from(e as Map),
+            ),
+          ),
+  );
+}
 
 class DetailPage extends StatefulWidget {
   final String postId;
   final String source;
   final int currentIndex;
 
+  // ホームで使ったソート/フィルタ/検索の状態（必要なら）
+  final Map<String, dynamic>? navContext;
+
+  // ★ 追加: ホーム側で「今画面に見えている投稿IDの並び」と、その中のインデックス
+  final List<String>? navIds;
+  final int? navIndex;
+
   const DetailPage({
     super.key,
     required this.postId,
     this.source = 'unknown',
     this.currentIndex = 0,
+    this.navContext,
+    this.navIds, // ★ 追加
+    this.navIndex, // ★ 追加
   });
 
   @override
@@ -25,6 +55,7 @@ class DetailPage extends StatefulWidget {
 }
 
 class _DetailPageState extends State<DetailPage> {
+  // === 既存 ===
   final ValueNotifier<String?> _selectedTile = ValueNotifier<String?>(null);
   final ValueNotifier<bool> _showResults = ValueNotifier<bool>(false);
   final TextEditingController commentController = TextEditingController();
@@ -43,6 +74,115 @@ class _DetailPageState extends State<DetailPage> {
   String _commentSelectedLeague = '未選択';
   String _commentSelectedRank = '未選択';
 
+  // ===== サブスク状態（簡易：ユーザーDocの isPremium/bool を参照。なければ false）=====
+  bool _isPremium = false;
+  Future<void> _loadPremiumFlag() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      if (mounted) setState(() => _isPremium = false);
+      return;
+    }
+    try {
+      final s = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .get();
+      final m = s.data() ?? const {};
+      final v = (m['isPremium'] ?? false) as bool;
+      if (mounted) setState(() => _isPremium = v);
+    } catch (_) {
+      if (mounted) setState(() => _isPremium = false);
+    }
+  }
+
+  // ===== 初期ローディング制御用（Firestore + 画像） =====
+  bool _postLoaded = false; // posts/{postId} の取得が完了したら true
+  bool _imageFinished = false; // 牌姿画像の表示まで完了したら true
+  bool get _showInitialLoading => !_postLoaded || !_imageFinished;
+
+  // ===== 「みんなの回答を見る」→ 3投稿ごとにアップセル =====
+  static const _kViewedSetKey = 'detail_unique_posts_seen';
+  Future<void> _maybeUpsellEvery3UniquePosts() async {
+    if (_isPremium) return; // 課金済はスキップ
+    final prefs = await SharedPreferences.getInstance();
+    final list = prefs.getStringList(_kViewedSetKey) ?? <String>[];
+    if (!list.contains(widget.postId)) {
+      list.add(widget.postId);
+      await prefs.setStringList(_kViewedSetKey, list);
+      if (list.length % 3 == 0) {
+        if (!mounted) return;
+        await showModalBottomSheet<void>(
+          context: context,
+          backgroundColor: const Color(0xFF0B1114),
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+          ),
+          builder: (_) => Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.workspace_premium,
+                  color: Colors.cyanAccent,
+                  size: 28,
+                ),
+                const SizedBox(height: 10),
+                const Text(
+                  '広告の代わりにサブスクで快適に！',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'サブスク登録すると回答入力・詳細操作が解放され、広告も非表示になります。',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.white70),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.pop(context),
+                        style: OutlinedButton.styleFrom(
+                          side: const BorderSide(color: Colors.cyanAccent),
+                          foregroundColor: Colors.cyanAccent,
+                        ),
+                        child: const Text('あとで'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: () {
+                          Navigator.pop(context);
+                          // 購入ページがある場合はここで遷移を実装してください
+                          // Navigator.of(context).pushNamed('/purchase');
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('マイページから購読設定が可能です')),
+                          );
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.cyanAccent,
+                          foregroundColor: Colors.black,
+                        ),
+                        child: const Text('サブスクを見る'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+    }
+  }
+
   Future<void> _playSE() async {
     await _player.play(AssetSource('sounds/cyber_click.mp3'));
   }
@@ -58,6 +198,47 @@ class _DetailPageState extends State<DetailPage> {
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(const SnackBar(content: Text('表示設定をリセットしました')));
+  }
+
+  // ★ HomePage / MyPage と同じテイストの「ページ全体ローディング」
+  Widget _buildFullPageLoading() {
+    return Container(
+      decoration: const BoxDecoration(
+        image: DecorationImage(
+          image: AssetImage('assets/images/background.png'),
+          fit: BoxFit.cover,
+        ),
+      ),
+      child: const Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator(
+              valueColor: AlwaysStoppedAnimation<Color>(Colors.cyanAccent),
+            ),
+            SizedBox(height: 16),
+            Text('Now Loading...', style: TextStyle(color: Colors.cyanAccent)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPremiumFlag();
+
+    // ★ ホーム側から navIds/navIndex が渡されていれば、それをそのまま使う
+    if (widget.navIds != null && widget.navIds!.isNotEmpty) {
+      _navIds = List<String>.from(widget.navIds!);
+      _navIndex =
+          widget.navIndex ??
+          widget.navIds!.indexOf(widget.postId); // 念のため postId から再計算
+    } else {
+      // ★ ブックマーク／直接リンク等、navIds がない場合だけ従来のロジックで並び構築
+      _buildNavOrder();
+    }
   }
 
   @override
@@ -112,7 +293,7 @@ class _DetailPageState extends State<DetailPage> {
     }
   }
 
-  // detail_page.dart 内：_submitAnswer を差し替え
+  // 回答送信（課金ユーザーのみボタン表示。実装は従来どおり）
   Future<void> _submitAnswer({required String postType}) async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) {
@@ -120,6 +301,13 @@ class _DetailPageState extends State<DetailPage> {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text('回答を保存するにはログインが必要です')));
+      return;
+    }
+    if (!_isPremium) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('回答はサブスク登録で利用できます')));
       return;
     }
 
@@ -152,7 +340,6 @@ class _DetailPageState extends State<DetailPage> {
         return;
       }
       if (_call.value == true) {
-        // 鳴くのときは「副露2枚」も「打牌」も必須
         if (_selectedCallTiles.value.length != 2) {
           if (!mounted) return;
           ScaffoldMessenger.of(
@@ -180,7 +367,6 @@ class _DetailPageState extends State<DetailPage> {
 
     final now = FieldValue.serverTimestamp();
 
-    // 送信する共通フィールド
     List<String> callTilesToSave = <String>[];
     if (postType == '副露判断' && _call.value == true) {
       callTilesToSave = _selectedCallTiles.value.toList()..sort();
@@ -300,6 +486,363 @@ class _DetailPageState extends State<DetailPage> {
     }
   }
 
+  // ======== 前/次ナビ用ユーティリティ ========
+  static const Map<String, List<String>> _leagueRanks = {
+    '未選択': ['未選択'],
+    '天鳳': [
+      '未選択',
+      '天鳳位',
+      '十段',
+      '九段',
+      '八段',
+      '七段',
+      '六段',
+      '五段',
+      '四段',
+      '三段',
+      '二段',
+      '初段',
+    ],
+    '雀魂': [
+      '未選択',
+      '魂天20',
+      '魂天19',
+      '魂天18',
+      '魂天17',
+      '魂天16',
+      '魂天15',
+      '魂天14',
+      '魂天13',
+      '魂天12',
+      '魂天11',
+      '魂天10',
+      '魂天9',
+      '魂天8',
+      '魂天7',
+      '魂天6',
+      '魂天5',
+      '魂天4',
+      '魂天3',
+      '魂天2',
+      '魂天1',
+      '雀聖3',
+      '雀聖2',
+      '雀聖1',
+      '雀豪3',
+      '雀豪2',
+      '雀豪1',
+      '雀傑3',
+      '雀傑2',
+      '雀傑1',
+      '雀士3',
+      '雀士2',
+      '雀士1',
+      '初心3',
+      '初心2',
+      '初心1',
+    ],
+    '日本プロ麻雀連盟': [
+      '未選択',
+      'A1リーグ',
+      'A2リーグ',
+      'B1リーグ',
+      'B2リーグ',
+      'C1リーグ',
+      'C2リーグ',
+      'C3リーグ',
+      'D1リーグ',
+      'D2リーグ',
+      'D3リーグ',
+      'E1リーグ',
+      'E2リーグ',
+      'E3リーグ',
+    ],
+    '最高位戦日本プロ麻雀協会': [
+      '未選択',
+      'A1リーグ',
+      'A2リーグ',
+      'B1リーグ',
+      'B2リーグ',
+      'C1リーグ',
+      'C2リーグ',
+      'C3リーグ',
+      'D1リーグ',
+      'D2リーグ',
+      'D3リーグ',
+    ],
+    '日本プロ麻雀協会': [
+      '未選択',
+      'A1リーグ',
+      'A2リーグ',
+      'B1リーグ',
+      'B2リーグ',
+      'C1リーグ',
+      'C2リーグ',
+      'C3リーグ',
+      'D1リーグ',
+      'D2リーグ',
+      'D3リーグ',
+      'E1リーグ',
+      'E2リーグ',
+      'E3リーグ',
+      'F1リーグ',
+    ],
+    '麻将連合': ['未選択', 'μリーグ', 'μ2リーグ'],
+    'RMU': [
+      '未選択',
+      'A1リーグ',
+      'A2リーグ',
+      'B1リーグ',
+      'B2リーグ',
+      'C1リーグ',
+      'C2リーグ',
+      'C3リーグ',
+      'D1リーグ',
+      'D2リーグ',
+      'D3リーグ',
+    ],
+  };
+
+  List<String>? _navIds;
+  int? _navIndex;
+  bool _navLoading = false;
+
+  int _rankOrderIndex(String league, String rank) {
+    final list = _leagueRanks[league];
+    if (list == null) return 1 << 30;
+    final idx = list.indexOf(rank);
+    if (idx < 0) return 1 << 30;
+    return idx == 0 ? (1 << 29) : idx;
+  }
+
+  String? _bestRankForLeague(List<Map<String, dynamic>>? affs, String league) {
+    if (affs == null) return null;
+    String? best;
+    var bestIdx = 1 << 30;
+    for (final a in affs) {
+      final aff = a['affiliation']?.toString();
+      final rk = a['rank']?.toString();
+      if (aff == league && rk != null && rk.isNotEmpty) {
+        final idx = _rankOrderIndex(league, rk);
+        if (idx < bestIdx) {
+          bestIdx = idx;
+          best = rk;
+        }
+      }
+    }
+    return best;
+  }
+
+  Future<void> _buildNavOrder() async {
+    if (_navLoading) return;
+    _navLoading = true;
+    try {
+      // ★ navContext があればそれを優先。なければデフォルト値。
+      final params =
+          widget.navContext ??
+          const {
+            'sortKey': '投稿順',
+            'ascending': false,
+            'selectedLeague': '未選択',
+            'selectedRank': '未選択',
+            'nicknameQuery': '',
+            'ruleFilter': 'すべて',
+            'typeFilter': 'すべて',
+          };
+
+      // ---- navContext のキーを柔軟に読むためのヘルパー ----
+      String _readString(List<String> keys, String fallback) {
+        for (final k in keys) {
+          final v = params[k];
+          if (v is String && v.isNotEmpty) return v;
+        }
+        return fallback;
+      }
+
+      bool _readBool(List<String> keys, bool fallback) {
+        for (final k in keys) {
+          final v = params[k];
+          if (v is bool) return v;
+        }
+        return fallback;
+      }
+
+      // ---- 並び替え条件の取得（複数候補キーをサポート） ----
+      final String sortKey = _readString([
+        'sortKey',
+        'postSortKey',
+        'sortBy',
+      ], '投稿順');
+      final bool ascending = _readBool([
+        'ascending',
+        'postAscending',
+        'isAscending',
+      ], false);
+      final String selectedLeague = _readString([
+        'selectedLeague',
+        'leagueFilter',
+        'postLeague',
+      ], '未選択');
+      final String selectedRank = _readString([
+        'selectedRank',
+        'rankFilter',
+        'postRank',
+      ], '未選択');
+      final String nicknameQuery = _readString([
+        'nicknameQuery',
+        'searchNickname',
+        'postNicknameQuery',
+      ], '');
+
+      // ★ 追加：ルール & 問題タイプのフィルタ値（キーが違っても拾えるように）
+      final String ruleFilter = _readString([
+        'ruleFilter',
+        'postRuleFilter',
+        'ruleTypeFilter',
+      ], 'すべて');
+      final String typeFilter = _readString([
+        'typeFilter',
+        'postTypeFilter',
+        'problemTypeFilter',
+      ], 'すべて');
+
+      // ---- posts 全件取得（※ 必要なら将来 where で絞ることも可能）----
+      final postsSnap = await FirebaseFirestore.instance
+          .collection('posts')
+          .get();
+      final docs = postsSnap.docs;
+
+      // ---- 投稿者プロフィールをまとめて取得 ----
+      final userIds = <String>{
+        for (final d in docs) ((d.data()['userId'] ?? '') as String),
+      }..removeWhere((e) => e.isEmpty);
+
+      final profMap = <String, _MiniProfile>{};
+      await Future.wait(
+        userIds.map((uid) async {
+          try {
+            final s = await FirebaseFirestore.instance
+                .collection('users')
+                .doc(uid)
+                .get();
+            if (s.exists) {
+              profMap[uid] = _MiniProfile.fromMap(s.data()!);
+            }
+          } catch (_) {}
+        }),
+      );
+
+      // ---- ホームと同じ条件でフィルタリング ----
+      final filtered = docs.where((d) {
+        final data = d.data();
+        final uid = (data['userId'] ?? '') as String;
+        final prof = profMap[uid];
+
+        // --- ニックネーム検索 ---
+        if (nicknameQuery.isNotEmpty) {
+          final name = (prof?.nickname ?? (data['userName'] as String? ?? ''))
+              .trim();
+          if (!name.toLowerCase().contains(nicknameQuery.toLowerCase())) {
+            return false;
+          }
+        }
+
+        // --- 所属/ランクフィルタ ---
+        if (selectedLeague != '未選択') {
+          final best = _bestRankForLeague(prof?.affiliations, selectedLeague);
+          if (selectedRank == '未選択') {
+            if (best == null) return false;
+          } else {
+            if (best == null) return false;
+            final need = _rankOrderIndex(selectedLeague, selectedRank);
+            final mine = _rankOrderIndex(selectedLeague, best);
+            if (mine > need) return false; // 「以上」判定
+          }
+        }
+
+        // --- ルールフィルタ（"すべて" 以外なら完全一致） ---
+        if (ruleFilter != 'すべて') {
+          final rule = (data['ruleType'] as String?) ?? '';
+          if (rule != ruleFilter) {
+            return false;
+          }
+        }
+
+        // --- 問題タイプフィルタ（"すべて" 以外なら完全一致） ---
+        if (typeFilter != 'すべて') {
+          final t = (data['postType'] as String?) ?? '';
+          if (t != typeFilter) {
+            return false;
+          }
+        }
+
+        return true;
+      }).toList();
+
+      // ---- 並び替え（投稿順 or お気に入り数順） ----
+      filtered.sort((a, b) {
+        int cmp;
+        if (sortKey == 'お気に入り数順') {
+          final la = (a.data()['likes'] ?? 0) as int;
+          final lb = (b.data()['likes'] ?? 0) as int;
+          cmp = la.compareTo(lb);
+        } else {
+          final ta = a.data()['createdAt'];
+          final tb = b.data()['createdAt'];
+          final va = (ta is Timestamp) ? ta.toDate().millisecondsSinceEpoch : 0;
+          final vb = (tb is Timestamp) ? tb.toDate().millisecondsSinceEpoch : 0;
+          cmp = va.compareTo(vb);
+        }
+        return ascending ? cmp : -cmp;
+      });
+
+      // ---- 現在の postId が並びの何番目かを計算 ----
+      final ids = filtered.map((e) => e.id).toList();
+      final idx = ids.indexOf(widget.postId);
+      if (mounted) {
+        setState(() {
+          _navIds = ids;
+          _navIndex = (idx >= 0) ? idx : null;
+        });
+      }
+    } finally {
+      _navLoading = false;
+    }
+  }
+
+  bool get _hasPrev => _navIds != null && _navIndex != null && _navIndex! > 0;
+  bool get _hasNext =>
+      _navIds != null && _navIndex != null && _navIndex! < _navIds!.length - 1;
+
+  Future<void> _goToIndex(int idx) async {
+    if (_navIds == null || idx < 0 || idx >= _navIds!.length) return;
+    final nextPostId = _navIds![idx];
+    if (!mounted) return;
+    Navigator.of(context).pushReplacement(
+      PageRouteBuilder(
+        pageBuilder: (_, __, ___) => DetailPage(
+          postId: nextPostId,
+          source: widget.source,
+          currentIndex: widget.currentIndex,
+          navContext: widget.navContext, // （必要なら）ホームの条件も引き継ぎ
+          // ★ ここがポイント：同じ navIds を引き継いで、インデックスだけ更新
+          navIds: _navIds,
+          navIndex: idx,
+        ),
+        transitionDuration: Duration.zero,
+        reverseTransitionDuration: Duration.zero,
+      ),
+    );
+  }
+
+  Future<void> _goPrev() async {
+    if (_hasPrev) await _goToIndex(_navIndex! - 1);
+  }
+
+  Future<void> _goNext() async {
+    if (_hasNext) await _goToIndex(_navIndex! + 1);
+  }
+
   @override
   Widget build(BuildContext context) {
     // 見出し共通スタイル
@@ -322,15 +865,30 @@ class _DetailPageState extends State<DetailPage> {
                 .doc(widget.postId)
                 .get(),
             builder: (context, snap) {
+              // ===== Firestore 読み込み中 =====
               if (snap.connectionState == ConnectionState.waiting) {
-                return const Center(
-                  child: Padding(
-                    padding: EdgeInsets.all(24),
-                    child: CircularProgressIndicator(),
-                  ),
-                );
+                // ローディング画面は Stack のオーバーレイ側で出すので、ここは空でOK
+                return const SizedBox.expand();
               }
+
+              // ===== Firestore 読み込みが完了したタイミングで一度だけフラグON =====
+              if (!_postLoaded) {
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (mounted) {
+                    setState(() => _postLoaded = true);
+                  }
+                });
+              }
+
+              // ===== エラー時：画像も来ないので画像側フラグも完了扱い =====
               if (snap.hasError) {
+                if (!_imageFinished) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted) {
+                      setState(() => _imageFinished = true);
+                    }
+                  });
+                }
                 return Center(
                   child: Padding(
                     padding: const EdgeInsets.all(24),
@@ -341,7 +899,16 @@ class _DetailPageState extends State<DetailPage> {
                   ),
                 );
               }
+
+              // ===== 投稿が存在しない：こちらも画像は来ないので完了扱い =====
               if (!snap.hasData || !snap.data!.exists) {
+                if (!_imageFinished) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted) {
+                      setState(() => _imageFinished = true);
+                    }
+                  });
+                }
                 return const Center(
                   child: Padding(
                     padding: EdgeInsets.all(24),
@@ -354,6 +921,7 @@ class _DetailPageState extends State<DetailPage> {
               }
 
               final data = snap.data!.data()!;
+
               final List<String> tiles = ((data['tiles'] as List?) ?? [])
                   .map((e) => e?.toString() ?? '')
                   .where((e) => e.isNotEmpty)
@@ -367,7 +935,6 @@ class _DetailPageState extends State<DetailPage> {
               if (mgDyn is List) {
                 for (final g in mgDyn) {
                   if (g is Map) {
-                    // 右側に出す見た目
                     if (g['displayTiles'] is List) {
                       final disp = (g['displayTiles'] as List)
                           .map((e) => e?.toString() ?? '')
@@ -375,15 +942,12 @@ class _DetailPageState extends State<DetailPage> {
                           .toList();
                       if (disp.isNotEmpty) meldDisplayGroups.add(disp);
                     } else if (g['tiles'] is List) {
-                      // 旧キー互換
                       final disp = (g['tiles'] as List)
                           .map((e) => e?.toString() ?? '')
                           .where((e) => e.isNotEmpty)
                           .toList();
                       if (disp.isNotEmpty) meldDisplayGroups.add(disp);
                     }
-
-                    // 手牌から差し引く実牌3枚
                     if (g['restoreTiles'] is List) {
                       final rt = (g['restoreTiles'] as List)
                           .map((e) => e?.toString() ?? '')
@@ -391,7 +955,6 @@ class _DetailPageState extends State<DetailPage> {
                           .toList();
                       if (rt.isNotEmpty) meldRestoreGroups.add(rt);
                     } else if (g['tiles'] is List) {
-                      // 旧キー互換
                       final rt = (g['tiles'] as List)
                           .map((e) => e?.toString() ?? '')
                           .where((e) => e.isNotEmpty && e != '0')
@@ -420,7 +983,6 @@ class _DetailPageState extends State<DetailPage> {
                   (data['answerComment'] as String?)?.trim() ?? '';
               final String authorUserId = (data['userId'] as String?) ?? '';
 
-              // posts の値
               final String ruleType =
                   ((data['ruleType'] as String?)?.trim().isNotEmpty ?? false)
                   ? (data['ruleType'] as String).trim()
@@ -430,10 +992,8 @@ class _DetailPageState extends State<DetailPage> {
                   ? (data['postType'] as String).trim()
                   : '不明';
 
-              // 表示は常に postType のまま
               final String displayPostType = postType;
 
-              // 投稿者 reach / call
               final bool? authorReach = data['reach'] as bool?;
               final bool? authorCall = data['call'] as bool?;
               final List<String>? authorCallTiles =
@@ -526,11 +1086,11 @@ class _DetailPageState extends State<DetailPage> {
                         ValueListenableBuilder<String?>(
                           valueListenable: _selectedTile,
                           builder: (context, sel, _) {
-                            return Row(
+                            final selector = Row(
                               crossAxisAlignment:
                                   CrossAxisAlignment.end, // ★底辺そろえ
                               children: [
-                                // 左：手牌 = 捨て候補（等幅・下端そろえ・選択で水色アンダーライン）
+                                // 左：手牌
                                 Expanded(
                                   child: Row(
                                     crossAxisAlignment: CrossAxisAlignment.end,
@@ -572,8 +1132,7 @@ class _DetailPageState extends State<DetailPage> {
                                     }).toList(),
                                   ),
                                 ),
-
-                                // 右：副露（小サイズ・横並び。なければ非表示）
+                                // 右：副露（小サイズ）
                                 if (meldDisplayGroups.isNotEmpty) ...[
                                   const SizedBox(width: 8),
                                   _SmallMeldGroupsRow(
@@ -582,6 +1141,16 @@ class _DetailPageState extends State<DetailPage> {
                                 ],
                               ],
                             );
+
+                            // 非課金は見せるだけ（タップ無効）
+                            return _isPremium
+                                ? selector
+                                : AbsorbPointer(
+                                    child: Opacity(
+                                      opacity: 0.95,
+                                      child: selector,
+                                    ),
+                                  );
                           },
                         ),
                     ],
@@ -648,15 +1217,29 @@ class _DetailPageState extends State<DetailPage> {
                               ),
                             );
 
+                            // ===== Storage の URL 解決中 =====
                             if (imgSnap.connectionState ==
                                 ConnectionState.waiting) {
                               return _fallbackBox('読み込み中…');
                             }
+
                             final url = imgSnap.data;
+
+                            // ===== URL が無い場合：画像はこれ以上来ないので完了扱い =====
                             if (url == null || url.isEmpty) {
+                              if (!_imageFinished) {
+                                WidgetsBinding.instance.addPostFrameCallback((
+                                  _,
+                                ) {
+                                  if (mounted) {
+                                    setState(() => _imageFinished = true);
+                                  }
+                                });
+                              }
                               return _fallbackBox('牌姿画像が登録されていません');
                             }
 
+                            // ===== URL が取れた場合：Image.network の描画完了でフラグON =====
                             final bordered = Container(
                               decoration: BoxDecoration(
                                 border: Border.all(
@@ -672,8 +1255,40 @@ class _DetailPageState extends State<DetailPage> {
                                   fit: BoxFit.contain,
                                   width: double.infinity,
                                   gaplessPlayback: true,
-                                  errorBuilder: (_, __, ___) =>
-                                      _fallbackBox('画像を読み込めませんでした'),
+                                  loadingBuilder:
+                                      (ctx, child, loadingProgress) {
+                                        if (loadingProgress == null) {
+                                          // 画像のデコードとレイアウトが終わったタイミング
+                                          if (!_imageFinished) {
+                                            WidgetsBinding.instance
+                                                .addPostFrameCallback((_) {
+                                                  if (mounted) {
+                                                    setState(
+                                                      () =>
+                                                          _imageFinished = true,
+                                                    );
+                                                  }
+                                                });
+                                          }
+                                          return child;
+                                        }
+                                        // 読み込み中：裏で読み込みだけ進める（表はローディングオーバーレイ）
+                                        return child;
+                                      },
+                                  errorBuilder: (ctx, error, stack) {
+                                    // エラーでももうこれ以上は読み込まれないので完了扱い
+                                    if (!_imageFinished) {
+                                      WidgetsBinding.instance
+                                          .addPostFrameCallback((_) {
+                                            if (mounted) {
+                                              setState(
+                                                () => _imageFinished = true,
+                                              );
+                                            }
+                                          });
+                                    }
+                                    return _fallbackBox('画像を読み込めませんでした');
+                                  },
                                 ),
                               ),
                             );
@@ -721,20 +1336,22 @@ class _DetailPageState extends State<DetailPage> {
                           ),
                         ),
 
-                        // タイプ選択
+                        // タイプ選択（非課金はトグル非表示）
                         const SizedBox(height: 16),
-                        _AnswerTypeCard(
-                          postType: postType,
-                          tiles:
-                              handForChoice, // ← ここを tiles から handForChoice に
-                          reach: _reach,
-                          call: _call,
-                          selectedCallTiles: _selectedCallTiles,
-                          selectedTile: _selectedTile,
-                          onSound: _playSE,
-                        ),
+                        if (_isPremium)
+                          _AnswerTypeCard(
+                            postType: postType,
+                            tiles: handForChoice,
+                            reach: _reach,
+                            call: _call,
+                            selectedCallTiles: _selectedCallTiles,
+                            selectedTile: _selectedTile,
+                            onSound: _playSE,
+                          )
+                        else
+                          const SizedBox.shrink(),
 
-                        // ④ 牌選択（副露判断でスルーの場合は非表示）
+                        // ④ 牌選択（非課金でも表示はするがタップ不可）
                         const SizedBox(height: 20),
                         if (postType != '副露判断') ...[
                           buildTileSelector(),
@@ -752,43 +1369,66 @@ class _DetailPageState extends State<DetailPage> {
 
                         const SizedBox(height: 24),
 
-                        TextField(
-                          controller: commentController,
-                          maxLength: 200, // 🔹 最大200文字に制限
-                          style: const TextStyle(color: Colors.white),
-                          decoration: const InputDecoration(
-                            filled: true,
-                            fillColor: Color.fromRGBO(0, 0, 0, 0.3),
-                            hintText: '理由・補足など（任意・200文字以内）',
-                            hintStyle: TextStyle(color: Colors.white54),
-                            counterStyle: TextStyle(
-                              color: Colors.white54,
-                            ), // 🔹 カウンターの色も調整
-                            border: OutlineInputBorder(
-                              borderSide: BorderSide(color: Colors.cyanAccent),
-                              borderRadius: BorderRadius.zero,
+                        // コメント欄（課金のみ）
+                        if (_isPremium) ...[
+                          TextField(
+                            controller: commentController,
+                            maxLength: 200,
+                            style: const TextStyle(color: Colors.white),
+                            decoration: const InputDecoration(
+                              filled: true,
+                              fillColor: Color.fromRGBO(0, 0, 0, 0.3),
+                              hintText: '理由・補足など（任意・200文字以内）',
+                              hintStyle: TextStyle(color: Colors.white54),
+                              counterStyle: TextStyle(color: Colors.white54),
+                              border: OutlineInputBorder(
+                                borderSide: BorderSide(
+                                  color: Colors.cyanAccent,
+                                ),
+                                borderRadius: BorderRadius.zero,
+                              ),
                             ),
                           ),
-                        ),
+                          const SizedBox(height: 16),
+                        ],
 
-                        const SizedBox(height: 16),
-
+                        // アクションボタン（課金: 回答する / 非課金: みんなの回答を見る）
                         Center(
-                          child: ElevatedButton.icon(
-                            onPressed: () => _submitAnswer(postType: postType),
-                            icon: const Icon(Icons.send),
-                            label: const Text('回答する'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.cyanAccent,
-                              foregroundColor: Colors.black,
-                              textStyle: const TextStyle(
-                                fontWeight: FontWeight.bold,
-                              ),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(24),
-                              ),
-                            ),
-                          ),
+                          child: _isPremium
+                              ? ElevatedButton.icon(
+                                  onPressed: () =>
+                                      _submitAnswer(postType: postType),
+                                  icon: const Icon(Icons.send),
+                                  label: const Text('回答する'),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.cyanAccent,
+                                    foregroundColor: Colors.black,
+                                    textStyle: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(24),
+                                    ),
+                                  ),
+                                )
+                              : ElevatedButton.icon(
+                                  onPressed: () async {
+                                    _showResults.value = true;
+                                    await _maybeUpsellEvery3UniquePosts();
+                                  },
+                                  icon: const Icon(Icons.visibility),
+                                  label: const Text('みんなの回答を見る'),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.cyanAccent,
+                                    foregroundColor: Colors.black,
+                                    textStyle: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(24),
+                                    ),
+                                  ),
+                                ),
                         ),
 
                         const SizedBox(height: 24),
@@ -856,7 +1496,7 @@ class _DetailPageState extends State<DetailPage> {
                                             color: lineColor,
                                           ),
 
-                                          // 下段：投稿者の選択/コメント（境界に縦線を配置）
+                                          // 下段：投稿者の選択/コメント
                                           Padding(
                                             padding: const EdgeInsets.fromLTRB(
                                               8,
@@ -937,7 +1577,7 @@ class _DetailPageState extends State<DetailPage> {
 
                         const SizedBox(height: 24),
 
-                        // ======== コメント欄（タブ化：円グラフラベル準拠） ========
+                        // ======== コメント欄（タブ化） ========
                         ValueListenableBuilder<bool>(
                           valueListenable: _showResults,
                           builder: (context, show, _) {
@@ -950,7 +1590,7 @@ class _DetailPageState extends State<DetailPage> {
                                     const Text('回答コメント', style: headerStyle),
                                     const Spacer(),
                                     const SizedBox(width: 8),
-                                    // ソートボタン（HomePageのUIを参考）
+                                    // ソートボタン
                                     Material(
                                       color: Colors.transparent,
                                       child: Ink(
@@ -1001,6 +1641,40 @@ class _DetailPageState extends State<DetailPage> {
                             );
                           },
                         ),
+
+                        // ====== 前/次ナビ（常時表示） ======
+                        const SizedBox(height: 16),
+                        Row(
+                          children: [
+                            if (_hasPrev)
+                              Expanded(
+                                child: OutlinedButton.icon(
+                                  onPressed: _goPrev,
+                                  icon: const Icon(Icons.chevron_left),
+                                  label: const Text('前の問題'),
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: Colors.cyanAccent,
+                                    side: const BorderSide(
+                                      color: Colors.cyanAccent,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            if (_hasPrev && _hasNext) const SizedBox(width: 12),
+                            if (_hasNext)
+                              Expanded(
+                                child: ElevatedButton.icon(
+                                  onPressed: _goNext,
+                                  icon: const Icon(Icons.chevron_right),
+                                  label: const Text('次の問題'),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.cyanAccent,
+                                    foregroundColor: Colors.black,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
                       ],
                     ),
                   );
@@ -1011,6 +1685,11 @@ class _DetailPageState extends State<DetailPage> {
 
           // 右上固定 ☆ ボタン
           const Positioned(top: 4, right: 4, child: _FavButtonOverlay()),
+
+          // ★ Firestore or 画像がまだ終わっていない間は、
+          //   Home/MyPage と同じローディング画面をページ全体にかぶせる
+          if (_showInitialLoading)
+            Positioned.fill(child: _buildFullPageLoading()),
         ],
       ),
     );
@@ -1028,6 +1707,9 @@ class _AnswerTypeCard extends StatelessWidget {
   final ValueNotifier<String?> selectedTile; // ★ スルー時に打牌選択もクリア
   final Future<void> Function() onSound;
 
+  // ★追加：非課金は選択UIを出さない（見出しだけ表示）
+  final bool readonly;
+
   const _AnswerTypeCard({
     super.key,
     required this.postType,
@@ -1037,6 +1719,7 @@ class _AnswerTypeCard extends StatelessWidget {
     required this.selectedCallTiles,
     required this.selectedTile,
     required this.onSound,
+    this.readonly = false,
   });
 
   @override
@@ -1058,7 +1741,8 @@ class _AnswerTypeCard extends StatelessWidget {
         Text(postType == 'リーチ判断' ? 'リーチする？' : '鳴く？', style: headerStyle),
         const SizedBox(height: 8),
 
-        if (postType == 'リーチ判断')
+        // ▼ 課金のみ：トグルと副露2枚選択を表示
+        if (postType == 'リーチ判断' && !readonly)
           ValueListenableBuilder<bool?>(
             valueListenable: reach,
             builder: (context, v, _) => Row(
@@ -1088,7 +1772,7 @@ class _AnswerTypeCard extends StatelessWidget {
             ),
           ),
 
-        if (postType == '副露判断') ...[
+        if (postType == '副露判断' && !readonly) ...[
           ValueListenableBuilder<bool?>(
             valueListenable: call,
             builder: (context, v, _) => Row(
@@ -1210,12 +1894,12 @@ class _SmallMeldGroupsRow extends StatelessWidget {
   final List<List<String>> groups;
   const _SmallMeldGroupsRow({super.key, required this.groups});
 
-  // 🔹 牌画像パスを返すヘルパー関数を追加
+  // 牌画像パス
   static String _asset(String id) => 'assets/tiles/$id.png';
 
   @override
   Widget build(BuildContext context) {
-    // 小さめ（編集画面と同等感）
+    // 小さめ
     const double tileW = 18;
     const double tileH = 27;
 
@@ -1226,7 +1910,7 @@ class _SmallMeldGroupsRow extends StatelessWidget {
         child: Align(
           alignment: Alignment.bottomCenter,
           child: Image.asset(
-            _asset(id), // 🔹 "0" も含めて assets/tiles/0.png を表示
+            _asset(id),
             fit: BoxFit.contain,
             errorBuilder: (_, __, ___) => const SizedBox.shrink(),
           ),
@@ -1544,7 +2228,7 @@ class _AuthorOnlyTileBox extends StatelessWidget {
           const SizedBox(height: 8),
         ],
 
-        // 副露判断（鳴く時）：鳴く → 副露に使う牌 → 打牌画像  の順に表示
+        // 副露判断（鳴く時）：鳴く → 副露に使う牌 → 打牌画像
         if (postType == '副露判断' && authorCall == true) ...[
           // 1) 鳴く
           pill('鳴く'),
@@ -1573,7 +2257,7 @@ class _AuthorOnlyTileBox extends StatelessWidget {
             ),
           ),
         ] else ...[
-          // 通常（リーチ判断/その他）：打牌のみ
+          // 通常：打牌のみ
           ConstrainedBox(
             constraints: const BoxConstraints(minHeight: 90, maxHeight: 120),
             child: AspectRatio(
@@ -1681,11 +2365,11 @@ List<String> _applyMeldRemovals(List<String> src, List<List<String>> groups) {
 }
 
 // =====================================================
-// 単一列の牌帯：左=手牌(選択可) / 右=副露(少し小さめ・選択不可)
+// 単一列の牌帯（使い所があれば利用）：左=手牌 / 右=副露
 // =====================================================
 class _SelectableTileStrip extends StatelessWidget {
-  final List<String> handTiles; // クリック可能(打牌候補)
-  final List<List<String>> meldDisplayGroups; // 右側に並べる見た目用牌
+  final List<String> handTiles;
+  final List<List<String>> meldDisplayGroups;
   final String? selected;
   final ValueChanged<String> onSelect;
 
@@ -1703,9 +2387,8 @@ class _SelectableTileStrip extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, c) {
-        // ▼ レイアウト計算（横幅に全て収まるようユニット割り）
-        const gapUnit = 0.6; // 副露グループ間の隙間（牌0.6枚分）
-        const meldScale = 0.82; // 副露の縮小率（“少し小さめ”）
+        const gapUnit = 0.6;
+        const meldScale = 0.82;
 
         final handCount = handTiles.length;
         final meldTilesTotal = meldDisplayGroups.fold<int>(
@@ -1780,12 +2463,9 @@ class _SelectableTileStrip extends StatelessWidget {
 
         final children = <Widget>[];
 
-        // 左：手牌（選択可）
         for (final id in handTiles) {
           children.add(handTile(id, selected == id));
         }
-
-        // 右：副露（小さめ・選択不可）
         for (int gi = 0; gi < meldDisplayGroups.length; gi++) {
           children.add(gapBox());
           for (final id in meldDisplayGroups[gi]) {
@@ -1922,7 +2602,7 @@ class _CombinedAnswersPie extends StatelessWidget {
             authorReach is bool &&
             authorAnswerTile.isNotEmpty) {
           final decision = authorReach == true ? 'する' : 'しない';
-          addLabel('$decision・$authorAnswerTile', authorAnswerTile);
+          addLabel('$decision・${authorAnswerTile}', authorAnswerTile);
         } else if (postType == '副露判断' && authorCall is bool) {
           final pair = _pairKeyFromList(authorCallTiles ?? const []);
           final pairText = (authorCall == true)
@@ -2059,10 +2739,13 @@ class _PieWithIconsState extends State<_PieWithIcons> {
 
   Offset? _centerOf(GlobalKey key) {
     final ctx = key.currentContext;
-    if (ctx == null) return null;
-    final box = ctx.findRenderObject() as RenderBox?;
+    final box = ctx?.findRenderObject() as RenderBox?;
     final parent = context.findRenderObject() as RenderBox?;
-    if (box == null || parent == null || !box.attached || !parent.attached)
+    if (ctx == null ||
+        box == null ||
+        parent == null ||
+        !box.attached ||
+        !parent.attached)
       return null;
     final g = box.localToGlobal(box.size.center(Offset.zero));
     return parent.globalToLocal(g);
@@ -2103,7 +2786,7 @@ class _PieWithIconsState extends State<_PieWithIcons> {
         ? const SizedBox.shrink()
         : _safeTile(slice.tileId!, w: m.w, h: m.h, key: imgKey);
 
-    // 「スルー」だけ（画像なし）なら pill に key を付ける
+    // 「スルー」だけ（画像なし）なら pill に key を付与
     final isTextOnly =
         (widget.postType == '副露判断') &&
         slice.label.startsWith('スルー') &&
@@ -2192,8 +2875,8 @@ class _PieWithIconsState extends State<_PieWithIcons> {
     // ％の配置
     double start = -math.pi / 2;
     final percentWidgets = <Widget>[];
-    final placedPercents = <Rect>[];
-    final percentCenters = <Offset>[];
+    final placedPercents = <Rect>[]; // 衝突回避のため記録
+    final percentCenters = <Offset>[]; // リーダー線の宛先
 
     const textW = 46.0;
     const textH = 22.0;
@@ -2278,6 +2961,7 @@ class _PieWithIconsState extends State<_PieWithIcons> {
                   fontWeight: FontWeight.w900,
                 ),
               ),
+              const SizedBox.shrink(),
               Text(
                 percent,
                 textAlign: TextAlign.center,
@@ -2313,7 +2997,6 @@ class _PieWithIconsState extends State<_PieWithIcons> {
             bottom: safePad,
             child: CustomPaint(painter: _PiePainter(paintEntries, colors)),
           ),
-          // このあと「背面の」リーダー線を重ねる（※後で別 CustomPaint を差し込む）
           // ％
           ...percentWidgets,
           // 四隅（最前面）
@@ -2372,10 +3055,6 @@ class _PieWithIconsState extends State<_PieWithIcons> {
         ],
       ),
     );
-
-    // まずベース（円）は使わず、レイヤーを明示的に並べ替える
-    // （後で四隅ウィジェットでキーを張るため、この時点でラインの起点座標を拾えない
-    //  場合は postFrame で 1 回だけ再計算して setState します）
 
     // 打牌画像中心 or 「スルー」ピル中心
     Offset? fromTR = _centerOf(_imgKeyTR);

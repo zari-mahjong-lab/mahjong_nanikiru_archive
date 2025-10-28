@@ -43,6 +43,17 @@ class _TitlePageState extends State<TitlePage>
     super.dispose();
   }
 
+  /// アニメーションなしで置き換え遷移
+  void _pushReplacementNoAnimation(Widget page) {
+    if (!mounted) return;
+    Navigator.of(context).pushReplacement(PageRouteBuilder(
+      pageBuilder: (_, __, ___) => page,
+      transitionDuration: Duration.zero,
+      reverseTransitionDuration: Duration.zero,
+      transitionsBuilder: (_, __, ___, child) => child,
+    ));
+  }
+
   Future<void> _handleStartup() async {
     if (_navigated) return;
     _navigated = true;
@@ -52,10 +63,7 @@ class _TitlePageState extends State<TitlePage>
     final user = FirebaseAuth.instance.currentUser;
 
     if (user == null) {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const LoginSelectionPage()),
-      );
+      _pushReplacementNoAnimation(const LoginSelectionPage());
       return;
     }
 
@@ -68,12 +76,7 @@ class _TitlePageState extends State<TitlePage>
     final updatedUser = FirebaseAuth.instance.currentUser;
     final hasProfile = updatedUser?.displayName?.isNotEmpty ?? false;
 
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(
-        builder: (_) => hasProfile ? HomePage() : const ProfileEditPage(),
-      ),
-    );
+    _pushReplacementNoAnimation(hasProfile ? HomePage() : const ProfileEditPage());
   }
 
   @override

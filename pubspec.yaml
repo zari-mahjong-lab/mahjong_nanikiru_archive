@@ -1,4 +1,4 @@
-name: zari_mahjong_lab
+name: mahjong_nanikiru_archive
 description: "A new Flutter project."
 publish_to: "none"
 
@@ -26,13 +26,21 @@ dependencies:
   firebase_storage: ^13.0.3
   firebase_app_check: ^0.4.1+1
 
-  # サインイン（Appleのみ外部プラグイン)
+  # サインイン
+  google_sign_in: ^6.2.1
   sign_in_with_apple: ^7.0.1
 
   # メディア / サウンド
   image: ^4.3.0
   image_picker: ^1.2.0
   audioplayers: ^6.5.1
+
+  in_app_purchase: ^3.2.3
+  in_app_purchase_android: ^0.4.0+5
+  in_app_purchase_storekit: ^0.4.4
+
+  shared_preferences: ^2.3.2
+  dio: ^5.7.0
 
 dev_dependencies:
   flutter_test:

@@ -35,16 +35,35 @@ class _HomePageState extends State<HomePage> {
     await _player.play(AssetSource('sounds/cyber_click.mp3'));
   }
 
-  // ← 修正：postId を受け取り DetailPage へ渡す
-  void _navigateToDetail(BuildContext context, String postId) async {
+  /// 並び順どおりの postId リスト(navPostIds) と
+  /// 現在タップしたインデックス(currentIndex) を DetailPage に渡す
+  void _navigateToDetail(
+    BuildContext context,
+    String postId,
+    List<String> navPostIds,
+    int currentIndex,
+  ) async {
     await _playSE();
     Navigator.push(
       context,
       PageRouteBuilder(
         pageBuilder: (_, __, ___) => DetailPage(
-          postId: postId, // ← 必須引数を渡す
+          postId: postId,
           source: 'home',
-          currentIndex: 0,
+          currentIndex: currentIndex,
+          navContext: {
+            'sortKey': _sortKey,
+            'ascending': _ascending,
+            'selectedLeague': _selectedLeague,
+            'selectedRank': _selectedRank,
+            'nicknameQuery': _nicknameQuery,
+            'selectedRule': _selectedRule,
+            'selectedPostType': _selectedPostType,
+            'navPostIds': navPostIds,
+          },
+          // DetailPage 側でそのまま前/次ナビに使う用
+          navIds: navPostIds,
+          navIndex: currentIndex,
         ),
         transitionDuration: Duration.zero,
         reverseTransitionDuration: Duration.zero,
@@ -58,6 +77,27 @@ class _HomePageState extends State<HomePage> {
   String _selectedLeague = '未選択';
   String _selectedRank = '未選択';
   String _nicknameQuery = '';
+
+  // ルール / 問題タイプのプルダウン用
+  String _selectedRule = '未選択';
+  String _selectedPostType = '未選択';
+
+  static const List<String> ruleOptions = [
+    '未選択',
+    '四麻・半荘',
+    '四麻・東風',
+    '三麻',
+  ];
+
+  static const List<String> postTypeOptions = [
+    '未選択',
+    '牌効率',
+    '押し引き',
+    'リーチ判断',
+    '副露判断',
+    'アシスト',
+    'その他',
+  ];
 
   // リーグ→段位表
   static const Map<String, List<String>> leagueRanks = {
@@ -287,6 +327,8 @@ class _HomePageState extends State<HomePage> {
         selectedRank: _selectedRank,
         nicknameQuery: _nicknameQuery,
         rankOptions: rankOptions,
+        selectedRule: _selectedRule,
+        selectedPostType: _selectedPostType,
       ),
     );
 
@@ -297,12 +339,366 @@ class _HomePageState extends State<HomePage> {
         _selectedLeague = result.selectedLeague;
         _selectedRank = result.selectedRank;
         _nicknameQuery = result.nicknameQuery;
+        _selectedRule = result.selectedRule;
+        _selectedPostType = result.selectedPostType;
       });
     }
   }
 
+  // ★ ページ全体ローディング表示（background.png＋水色ぐるぐる）
+  Widget _buildFullPageLoading() {
+    return Container(
+      decoration: const BoxDecoration(
+        image: DecorationImage(
+          image: AssetImage('assets/images/background.png'),
+          fit: BoxFit.cover,
+        ),
+      ),
+      child: const Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator(
+              valueColor: AlwaysStoppedAnimation<Color>(Colors.cyanAccent),
+            ),
+            SizedBox(height: 16),
+            Text(
+              'Now Loading...',
+              style: TextStyle(
+                color: Colors.cyanAccent,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ★ エラー表示（ページ完成扱いなのでローディングではなくメッセージ）
+  Widget _buildErrorPage(String message) {
+    return Container(
+      margin: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            Colors.cyan.withOpacity(0.15),
+            Colors.black.withOpacity(0.6),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        border: Border.all(color: Colors.cyanAccent, width: 1.5),
+      ),
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            message,
+            style: const TextStyle(color: Colors.redAccent),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ★ 投稿ゼロ／フィルタでゼロのとき
+  Widget _buildMessagePage(String message) {
+    return Container(
+      margin: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            Colors.cyan.withOpacity(0.15),
+            Colors.black.withOpacity(0.6),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        border: Border.all(color: Colors.cyanAccent, width: 1.5),
+      ),
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            message,
+            style: const TextStyle(color: Colors.white70),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ★ 実データで描画する部分（ページ完成後にのみ呼ばれる）
+  Widget _buildPostListPage(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+    Map<String, _UserProfile?> profiles,
+  ) {
+    // フィルタ
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> filtered =
+        docs.where((doc) {
+      final data = doc.data();
+      final userId = (data['userId'] ?? '') as String;
+      final prof = profiles[userId];
+
+      // ルール / 問題タイプ
+      final String ruleType = (data['ruleType'] ?? '').toString();
+      final String postType = (data['postType'] ?? '').toString();
+
+      // ニックネーム検索
+      final nameSource = prof?.nickname ?? (data['userName'] as String?);
+      final userName = (nameSource ?? '').trim();
+      if (_nicknameQuery.trim().isNotEmpty) {
+        final q = _nicknameQuery.trim().toLowerCase();
+        if (!userName.toLowerCase().contains(q)) {
+          return false;
+        }
+      }
+
+      // ルールフィルタ
+      if (_selectedRule != '未選択') {
+        if (ruleType != _selectedRule) {
+          return false;
+        }
+      }
+
+      // 問題タイプフィルタ
+      if (_selectedPostType != '未選択') {
+        if (postType != _selectedPostType) {
+          return false;
+        }
+      }
+
+      // 所属・段位フィルタ
+      if (_selectedLeague != '未選択') {
+        final affiliations = prof?.affiliations;
+        final rankStr = _extractRankForLeague(
+          affiliations,
+          _selectedLeague,
+        );
+
+        if (_selectedRank == '未選択') {
+          // 所属のみ指定 → そのリーグに所属していない人は除外
+          if (rankStr == null) return false;
+        } else {
+          if (rankStr == null || rankStr.isEmpty) {
+            return false;
+          }
+          final needIdx = _rankOrderIndex(_selectedLeague, _selectedRank);
+          final userIdx = _rankOrderIndex(_selectedLeague, rankStr);
+          if (userIdx > needIdx) {
+            // 「以上」ではない → 除外
+            return false;
+          }
+        }
+      }
+
+      return true;
+    }).toList();
+
+    // ソート
+    filtered.sort((a, b) {
+      final da = a.data();
+      final db = b.data();
+      int cmp;
+      if (_sortKey == 'お気に入り数順') {
+        final la = (da['likes'] ?? 0) as int;
+        final lb = (db['likes'] ?? 0) as int;
+        cmp = la.compareTo(lb);
+      } else {
+        final ta = da['createdAt'];
+        final tb = db['createdAt'];
+        final va =
+            (ta is Timestamp) ? ta.toDate().millisecondsSinceEpoch : 0;
+        final vb =
+            (tb is Timestamp) ? tb.toDate().millisecondsSinceEpoch : 0;
+        cmp = va.compareTo(vb);
+      }
+      return _ascending ? cmp : -cmp;
+    });
+
+    if (filtered.isEmpty) {
+      // フィルタで 0 件になった場合は「ページ完成」扱いでメッセージ表示
+      return _buildMessagePage('条件に一致する投稿がありません');
+    }
+
+    // 現在の並び順の postId リスト
+    final navPostIds = filtered.map((d) => d.id).toList();
+
+    // 実際の UI
+    return Stack(
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            children: [
+              const SizedBox(height: 12),
+              Expanded(
+                child: Container(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        Colors.cyan.withOpacity(0.15),
+                        Colors.black.withOpacity(0.6),
+                      ],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    border: Border.all(color: Colors.cyanAccent, width: 1.5),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.cyanAccent.withOpacity(0.5),
+                        blurRadius: 18,
+                        spreadRadius: 2,
+                        offset: const Offset(4, 6),
+                      ),
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.8),
+                        blurRadius: 6,
+                        offset: const Offset(-4, -4),
+                      ),
+                    ],
+                  ),
+                  child: ListView.separated(
+                    padding: EdgeInsets.zero,
+                    itemCount: filtered.length,
+                    separatorBuilder: (context, index) => const Divider(
+                      color: Colors.cyanAccent,
+                      height: 1,
+                      thickness: 1,
+                      indent: 16,
+                      endIndent: 16,
+                    ),
+                    itemBuilder: (context, index) {
+                      final doc = filtered[index];
+                      final data = doc.data();
+
+                      // 牌姿（ベース手牌：そのまま表示して二重減算を防ぐ）
+                      final List<dynamic> tilesDyn =
+                          (data['tiles'] ?? []) as List<dynamic>;
+                      final tiles = tilesDyn
+                          .map((e) => e?.toString() ?? '')
+                          .where((e) => e.isNotEmpty)
+                          .toList();
+
+                      // 🔷 meldGroups から右側表示用の displayTiles を抽出
+                      final List<List<String>> meldDisplayGroups = [];
+                      final mgDyn = data['meldGroups'];
+                      if (mgDyn is List) {
+                        for (final g in mgDyn) {
+                          if (g is Map) {
+                            List<dynamic>? dispDyn;
+                            if (g['displayTiles'] is List) {
+                              dispDyn = g['displayTiles'] as List;
+                            } else if (g['tiles'] is List) {
+                              // 互換キー（旧データ）
+                              dispDyn = g['tiles'] as List;
+                            }
+                            if (dispDyn != null) {
+                              final disp = dispDyn
+                                  .map((e) => e?.toString() ?? '')
+                                  .where((e) => e.isNotEmpty)
+                                  .toList();
+                              if (disp.isNotEmpty) {
+                                meldDisplayGroups.add(disp);
+                              }
+                            }
+                          }
+                        }
+                      }
+
+                      // メタ
+                      final String ruleType =
+                          (data['ruleType'] ?? '').toString();
+                      final String postType =
+                          (data['postType'] ?? '').toString();
+                      final userId = (data['userId'] ?? '') as String;
+
+                      // プロフィール
+                      final prof = profiles[userId];
+                      final nameSource =
+                          prof?.nickname ?? (data['userName'] as String?);
+                      final userName =
+                          (nameSource ?? '').trim().isNotEmpty
+                              ? nameSource!.trim()
+                              : '匿名';
+                      final affiliations =
+                          _stringifyAffiliations(prof?.affiliations);
+                      final highestRank = prof?.highestRank;
+
+                      return InkWell(
+                        onTap: () => _navigateToDetail(
+                          context,
+                          doc.id,
+                          navPostIds,
+                          index,
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _TileStrip(
+                                tiles: tiles,
+                                meldDisplayGroups: meldDisplayGroups,
+                                meldScale: 0.68,
+                              ),
+                              const SizedBox(height: 8),
+                              _buildMetaRichText(
+                                ruleType: ruleType,
+                                postType: postType,
+                                userName: userName,
+                                affiliations: affiliations,
+                                highestRank: highestRank,
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        // 右上の小さいボタン（設定モーダルを開く）
+        Positioned(
+          right: 12,
+          top: 12,
+          child: Material(
+            color: Colors.transparent,
+            child: Ink(
+              decoration: const ShapeDecoration(
+                color: Color(0xFF0B1114),
+                shape: CircleBorder(
+                  side: BorderSide(
+                    color: Colors.cyanAccent,
+                    width: 1,
+                  ),
+                ),
+              ),
+              child: IconButton(
+                tooltip: 'ソート・フィルタ・検索',
+                icon: const Icon(
+                  Icons.tune,
+                  size: 20,
+                  color: Colors.cyanAccent,
+                ),
+                onPressed: _openControlsSheet,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    // 所属変更時に rank が不正になった場合のケア
     final rankOptions = leagueRanks[_selectedLeague] ?? ['未選択'];
     if (!rankOptions.contains(_selectedRank)) {
       _selectedRank = '未選択';
@@ -311,310 +707,48 @@ class _HomePageState extends State<HomePage> {
     return BaseScaffold(
       title: '投稿一覧',
       currentIndex: 0,
-      body: Stack(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
-              children: [
-                const SizedBox(height: 12),
-                Expanded(
-                  child: Container(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [
-                          Colors.cyan.withOpacity(0.15),
-                          Colors.black.withOpacity(0.6),
-                        ],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
-                      border: Border.all(color: Colors.cyanAccent, width: 1.5),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.cyanAccent.withOpacity(0.5),
-                          blurRadius: 18,
-                          spreadRadius: 2,
-                          offset: const Offset(4, 6),
-                        ),
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.8),
-                          blurRadius: 6,
-                          offset: const Offset(-4, -4),
-                        ),
-                      ],
-                    ),
-                    child:
-                        StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                      stream: FirebaseFirestore.instance
-                          .collection('posts')
-                          .orderBy('createdAt', descending: true)
-                          .snapshots(),
-                      builder: (context, snapshot) {
-                        if (snapshot.connectionState ==
-                            ConnectionState.waiting) {
-                          return const Center(
-                            child: Padding(
-                              padding: EdgeInsets.all(24),
-                              child: CircularProgressIndicator(),
-                            ),
-                          );
-                        }
-                        if (snapshot.hasError) {
-                          return Center(
-                            child: Padding(
-                              padding: const EdgeInsets.all(24),
-                              child: Text(
-                                '読み込みエラー: ${snapshot.error}',
-                                style: const TextStyle(color: Colors.redAccent),
-                              ),
-                            ),
-                          );
-                        }
-                        final docs = snapshot.data?.docs ?? [];
-                        if (docs.isEmpty) {
-                          return const Center(
-                            child: Padding(
-                              padding: EdgeInsets.all(24),
-                              child: Text(
-                                '投稿がまだありません',
-                                style: TextStyle(color: Colors.white70),
-                              ),
-                            ),
-                          );
-                        }
+      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+        stream: FirebaseFirestore.instance
+            .collection('posts')
+            .orderBy('createdAt', descending: true)
+            .snapshots(),
+        builder: (context, snapshot) {
+          // ★ 1段階目：posts が来るまでページ全体ローディング
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return _buildFullPageLoading();
+          }
+          if (snapshot.hasError) {
+            return _buildErrorPage('読み込みエラー: ${snapshot.error}');
+          }
 
-                        final userIds = <String>{
-                          for (final d in docs)
-                            (d.data()['userId'] ?? '') as String,
-                        }..removeWhere((e) => e.isEmpty);
+          final docs = snapshot.data?.docs ?? [];
+          if (docs.isEmpty) {
+            // 投稿 0 件 → ページ完成扱い
+            return _buildMessagePage('投稿がまだありません');
+          }
 
-                        return FutureBuilder<Map<String, _UserProfile?>>(
-                          future: _loadProfiles(userIds),
-                          builder: (context, profSnap) {
-                            final profiles = profSnap.data ?? {};
+          // Users のプロフィールが揃うまで、ページ全体ローディング
+          final userIds = <String>{
+            for (final d in docs) (d.data()['userId'] ?? '') as String,
+          }..removeWhere((e) => e.isEmpty);
 
-                            // フィルタ
-                            List<QueryDocumentSnapshot<Map<String, dynamic>>>
-                                filtered = docs.where((doc) {
-                              final data = doc.data();
-                              final userId = (data['userId'] ?? '') as String;
-                              final prof = profiles[userId];
+          return FutureBuilder<Map<String, _UserProfile?>>(
+            future: _loadProfiles(userIds),
+            builder: (context, profSnap) {
+              if (profSnap.connectionState == ConnectionState.waiting) {
+                return _buildFullPageLoading();
+              }
+              if (profSnap.hasError) {
+                return _buildErrorPage(
+                  'ユーザープロフィール読み込みエラー: ${profSnap.error}',
+                );
+              }
 
-                              // ニックネーム検索
-                              final nameSource = prof?.nickname ??
-                                  (data['userName'] as String?);
-                              final userName = (nameSource ?? '').trim();
-                              if (_nicknameQuery.trim().isNotEmpty) {
-                                final q = _nicknameQuery.trim().toLowerCase();
-                                if (!userName.toLowerCase().contains(q)) {
-                                  return false;
-                                }
-                              }
-
-                              // 所属・段位フィルタ
-                              if (_selectedLeague != '未選択') {
-                                final affiliations = prof?.affiliations;
-                                final rankStr = _extractRankForLeague(
-                                  affiliations,
-                                  _selectedLeague,
-                                );
-
-                                if (_selectedRank == '未選択') {
-                                  if (rankStr == null) return false; // 所属のみ指定
-                                } else {
-                                  if (rankStr == null || rankStr.isEmpty) {
-                                    return false;
-                                  }
-                                  final needIdx = _rankOrderIndex(
-                                    _selectedLeague,
-                                    _selectedRank,
-                                  );
-                                  final userIdx = _rankOrderIndex(
-                                    _selectedLeague,
-                                    rankStr,
-                                  );
-                                  if (userIdx > needIdx) return false; // 「以上」
-                                }
-                              }
-
-                              return true;
-                            }).toList();
-
-                            // ソート
-                            filtered.sort((a, b) {
-                              final da = a.data();
-                              final db = b.data();
-                              int cmp;
-                              if (_sortKey == 'お気に入り数順') {
-                                final la = (da['likes'] ?? 0) as int;
-                                final lb = (db['likes'] ?? 0) as int;
-                                cmp = la.compareTo(lb);
-                              } else {
-                                final ta = da['createdAt'];
-                                final tb = db['createdAt'];
-                                final va = (ta is Timestamp)
-                                    ? ta.toDate().millisecondsSinceEpoch
-                                    : 0;
-                                final vb = (tb is Timestamp)
-                                    ? tb.toDate().millisecondsSinceEpoch
-                                    : 0;
-                                cmp = va.compareTo(vb);
-                              }
-                              return _ascending ? cmp : -cmp;
-                            });
-
-                            if (filtered.isEmpty) {
-                              return const Center(
-                                child: Padding(
-                                  padding: EdgeInsets.all(24),
-                                  child: Text(
-                                    '条件に一致する投稿がありません',
-                                    style: TextStyle(color: Colors.white70),
-                                  ),
-                                ),
-                              );
-                            }
-
-                            // 描画
-                            return ListView.separated(
-                              padding: EdgeInsets.zero,
-                              itemCount: filtered.length,
-                              separatorBuilder: (context, index) =>
-                                  const Divider(
-                                color: Colors.cyanAccent,
-                                height: 1,
-                                thickness: 1,
-                                indent: 16,
-                                endIndent: 16,
-                              ),
-                              itemBuilder: (context, index) {
-                                final doc = filtered[index];
-                                final data = doc.data();
-
-                                // 牌姿（ベース手牌：そのまま表示して二重減算を防ぐ）
-                                final List<dynamic> tilesDyn =
-                                    (data['tiles'] ?? []) as List<dynamic>;
-                                final tiles = tilesDyn
-                                    .map((e) => e?.toString() ?? '')
-                                    .where((e) => e.isNotEmpty)
-                                    .toList();
-
-                                // 🔷 meldGroups から右側表示用の displayTiles を抽出
-                                final List<List<String>> meldDisplayGroups = [];
-                                final mgDyn = data['meldGroups'];
-                                if (mgDyn is List) {
-                                  for (final g in mgDyn) {
-                                    if (g is Map) {
-                                      List<dynamic>? dispDyn;
-                                      if (g['displayTiles'] is List) {
-                                        dispDyn = g['displayTiles'] as List;
-                                      } else if (g['tiles'] is List) {
-                                        // 互換キー（旧データ）
-                                        dispDyn = g['tiles'] as List;
-                                      }
-                                      if (dispDyn != null) {
-                                        final disp = dispDyn
-                                            .map((e) => e?.toString() ?? '')
-                                            .where((e) => e.isNotEmpty)
-                                            .toList();
-                                        if (disp.isNotEmpty) {
-                                          meldDisplayGroups.add(disp);
-                                        }
-                                      }
-                                    }
-                                  }
-                                }
-
-                                // メタ
-                                final ruleType =
-                                    (data['ruleType'] ?? '') as String;
-                                final postType =
-                                    (data['postType'] ?? '') as String;
-                                final userId = (data['userId'] ?? '') as String;
-
-                                // プロフィール
-                                final prof = profiles[userId];
-                                final nameSource = prof?.nickname ??
-                                    (data['userName'] as String?);
-                                final userName = (nameSource ?? '')
-                                        .trim()
-                                        .isNotEmpty
-                                    ? nameSource!.trim()
-                                    : '匿名';
-                                final affiliations = _stringifyAffiliations(
-                                  prof?.affiliations,
-                                );
-                                final highestRank = prof?.highestRank;
-
-                                return InkWell(
-                                  onTap: () =>
-                                      _navigateToDetail(context, doc.id),
-                                  child: Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 12,
-                                      vertical: 10,
-                                    ),
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        // 👇 手牌 + 副露（副露は小さく右側に）
-                                        _TileStrip(
-                                          tiles: tiles,
-                                          meldDisplayGroups:
-                                              meldDisplayGroups,
-                                          meldScale: 0.68, // ★ 副露を小さく
-                                        ),
-                                        const SizedBox(height: 8),
-                                        _buildMetaRichText(
-                                          ruleType: ruleType,
-                                          postType: postType,
-                                          userName: userName,
-                                          affiliations: affiliations,
-                                          highestRank: highestRank,
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                );
-                              },
-                            );
-                          },
-                        );
-                      },
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          // 右上の小さいボタン（設定モーダルを開く）
-          Positioned(
-            right: 12,
-            top: 12,
-            child: Material(
-              color: Colors.transparent,
-              child: Ink(
-                decoration: const ShapeDecoration(
-                  color: Color(0xFF0B1114),
-                  shape: CircleBorder(
-                    side: BorderSide(color: Colors.cyanAccent, width: 1),
-                  ),
-                ),
-                child: IconButton(
-                  tooltip: 'ソート・フィルタ・検索',
-                  icon: const Icon(
-                    Icons.tune,
-                    size: 20,
-                    color: Colors.cyanAccent,
-                  ),
-                  onPressed: _openControlsSheet,
-                ),
-              ),
-            ),
-          ),
-        ],
+              final profiles = profSnap.data ?? {};
+              return _buildPostListPage(docs, profiles);
+            },
+          );
+        },
       ),
     );
   }
@@ -628,6 +762,9 @@ class _ControlsResult {
   final String selectedLeague;
   final String selectedRank;
   final String nicknameQuery;
+  // ルール / 問題タイプ
+  final String selectedRule;
+  final String selectedPostType;
 
   _ControlsResult({
     required this.sortKey,
@@ -635,6 +772,8 @@ class _ControlsResult {
     required this.selectedLeague,
     required this.selectedRank,
     required this.nicknameQuery,
+    required this.selectedRule,
+    required this.selectedPostType,
   });
 }
 
@@ -646,6 +785,10 @@ class _ControlsSheet extends StatefulWidget {
   final String nicknameQuery;
   final List<String> rankOptions;
 
+  // ルール / 問題タイプ
+  final String selectedRule;
+  final String selectedPostType;
+
   const _ControlsSheet({
     Key? key,
     required this.sortKey,
@@ -654,6 +797,8 @@ class _ControlsSheet extends StatefulWidget {
     required this.selectedRank,
     required this.nicknameQuery,
     required this.rankOptions,
+    required this.selectedRule,
+    required this.selectedPostType,
   }) : super(key: key);
 
   @override
@@ -667,6 +812,10 @@ class _ControlsSheetState extends State<_ControlsSheet> {
   late String _selectedRank;
   late TextEditingController _nickCtrl;
 
+  // ルール / 問題タイプ
+  late String _selectedRule;
+  late String _selectedPostType;
+
   List<String> get _rankOptions =>
       _HomePageState.leagueRanks[_selectedLeague] ?? const ['未選択'];
 
@@ -678,6 +827,8 @@ class _ControlsSheetState extends State<_ControlsSheet> {
     _selectedLeague = widget.selectedLeague;
     _selectedRank = widget.selectedRank;
     _nickCtrl = TextEditingController(text: widget.nicknameQuery);
+    _selectedRule = widget.selectedRule;
+    _selectedPostType = widget.selectedPostType;
   }
 
   @override
@@ -695,6 +846,8 @@ class _ControlsSheetState extends State<_ControlsSheet> {
         selectedLeague: _selectedLeague,
         selectedRank: _selectedRank,
         nicknameQuery: _nickCtrl.text,
+        selectedRule: _selectedRule,
+        selectedPostType: _selectedPostType,
       ),
     );
   }
@@ -706,6 +859,8 @@ class _ControlsSheetState extends State<_ControlsSheet> {
       _selectedLeague = '未選択';
       _selectedRank = '未選択';
       _nickCtrl.text = '';
+      _selectedRule = '未選択';
+      _selectedPostType = '未選択';
     });
   }
 
@@ -724,6 +879,7 @@ class _ControlsSheetState extends State<_ControlsSheet> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            // ドラッグハンドル
             Container(
               width: 44,
               height: 4,
@@ -760,32 +916,6 @@ class _ControlsSheetState extends State<_ControlsSheet> {
             ),
             const SizedBox(height: 8),
 
-            // ニックネーム検索
-            TextField(
-              controller: _nickCtrl,
-              style: const TextStyle(color: Colors.white),
-              decoration: InputDecoration(
-                prefixIcon: const Icon(Icons.search, color: Colors.cyanAccent),
-                hintText: 'ニックネームで検索',
-                hintStyle: const TextStyle(color: Colors.white54),
-                filled: true,
-                fillColor: Colors.black87,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide: const BorderSide(color: Colors.cyanAccent),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide: const BorderSide(color: Colors.cyanAccent),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide: const BorderSide(color: Colors.cyan),
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-
             // ソート＆昇順降順
             Row(
               children: [
@@ -811,7 +941,31 @@ class _ControlsSheetState extends State<_ControlsSheet> {
             ),
             const SizedBox(height: 12),
 
-            // フィルタ：リーグ／段位
+            // ルール／問題タイプ
+            Row(
+              children: [
+                Expanded(
+                  child: _boxedDropdown<String>(
+                    label: 'ルール',
+                    value: _selectedRule,
+                    items: _HomePageState.ruleOptions,
+                    onChanged: (v) => setState(() => _selectedRule = v!),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _boxedDropdown<String>(
+                    label: '問題タイプ',
+                    value: _selectedPostType,
+                    items: _HomePageState.postTypeOptions,
+                    onChanged: (v) => setState(() => _selectedPostType = v!),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+
+            // 所属／最高ランク
             Row(
               children: [
                 Expanded(
@@ -837,6 +991,33 @@ class _ControlsSheetState extends State<_ControlsSheet> {
                   ),
                 ),
               ],
+            ),
+            const SizedBox(height: 12),
+
+            // ニックネーム検索
+            TextField(
+              controller: _nickCtrl,
+              style: const TextStyle(color: Colors.white),
+              decoration: InputDecoration(
+                prefixIcon:
+                    const Icon(Icons.search, color: Colors.cyanAccent),
+                hintText: 'ニックネームで検索',
+                hintStyle: const TextStyle(color: Colors.white54),
+                filled: true,
+                fillColor: Colors.black87,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: const BorderSide(color: Colors.cyanAccent),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: const BorderSide(color: Colors.cyanAccent),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: const BorderSide(color: Colors.cyan),
+                ),
+              ),
             ),
             const SizedBox(height: 16),
 
@@ -911,9 +1092,9 @@ class _ControlsSheetState extends State<_ControlsSheet> {
 
 // ===== 牌帯ウィジェット（手牌 + 副露を1列で描画：副露は縮小） =====
 class _TileStrip extends StatelessWidget {
-  final List<String> tiles;                         // 手牌（そのまま表示）
-  final List<List<String>> meldDisplayGroups;       // 右側に表示する displayTiles 群
-  final double meldScale;                           // 副露の縮小率（手牌=1.0）
+  final List<String> tiles; // 手牌（そのまま表示）
+  final List<List<String>> meldDisplayGroups; // 右側に表示する displayTiles 群
+  final double meldScale; // 副露の縮小率（手牌=1.0）
 
   const _TileStrip({
     required this.tiles,
@@ -925,7 +1106,9 @@ class _TileStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (tiles.isEmpty && meldDisplayGroups.isEmpty) return const SizedBox.shrink();
+    if (tiles.isEmpty && meldDisplayGroups.isEmpty) {
+      return const SizedBox.shrink();
+    }
 
     return LayoutBuilder(
       builder: (context, c) {
@@ -937,13 +1120,15 @@ class _TileStrip extends StatelessWidget {
 
         // 手牌↔副露／グループ間の小さな隙間（牌幅に対する割合）
         const double gapUnit = 0.45;
-        final gapCount = meldDisplayGroups.isEmpty ? 0 : meldDisplayGroups.length;
-        final totalUnits = handCount.toDouble() + meldUnits + gapCount * gapUnit;
+        final gapCount =
+            meldDisplayGroups.isEmpty ? 0 : meldDisplayGroups.length;
+        final totalUnits =
+            handCount.toDouble() + meldUnits + gapCount * gapUnit;
 
         final baseW = c.maxWidth / (totalUnits <= 0 ? 1 : totalUnits);
-        final handW = baseW;               // 手牌の1枚幅
-        final meldW = baseW * meldScale;   // 副露の1枚幅（縮小）
-        final height = handW * 3 / 2;      // 列の高さは手牌基準
+        final handW = baseW; // 手牌の1枚幅
+        final meldW = baseW * meldScale; // 副露の1枚幅（縮小）
+        final height = handW * 3 / 2; // 列の高さは手牌基準
 
         Widget tileBox(String id, double w) => SizedBox(
               width: w,
@@ -954,8 +1139,12 @@ class _TileStrip extends StatelessWidget {
                   child: Image.asset(
                     _asset(id),
                     fit: BoxFit.contain,
-                    errorBuilder: (_, __, ___) =>
-                        Center(child: Text(id, style: const TextStyle(color: Colors.white))),
+                    errorBuilder: (_, __, ___) => Center(
+                      child: Text(
+                        id,
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                    ),
                   ),
                 ),
               ),
