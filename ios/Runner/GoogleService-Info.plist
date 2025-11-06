@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CLIENT_ID</key>
+	<string>789283848967-hci3r8n7hb1hbjovi2nhivcmmt7aftlm.apps.googleusercontent.com</string>
+	<key>REVERSED_CLIENT_ID</key>
+	<string>com.googleusercontent.apps.789283848967-hci3r8n7hb1hbjovi2nhivcmmt7aftlm</string>
+	<key>ANDROID_CLIENT_ID</key>
+	<string>789283848967-qdh5q37moa7a07m0go156mtqfm3bqvpi.apps.googleusercontent.com</string>
+	<key>API_KEY</key>
+	<string>AIzaSyBBaAg1VD70Rd7O5O2UibQpSiUuk9VCVM0</string>
+	<key>GCM_SENDER_ID</key>
+	<string>789283848967</string>
+	<key>PLIST_VERSION</key>
+	<string>1</string>
+	<key>BUNDLE_ID</key>
+	<string>com.Mahjong-Nanikiru-Archive</string>
+	<key>PROJECT_ID</key>
+	<string>mahjong-nanikiru-archive</string>
+	<key>STORAGE_BUCKET</key>
+	<string>mahjong-nanikiru-archive.firebasestorage.app</string>
+	<key>IS_ADS_ENABLED</key>
+	<false></false>
+	<key>IS_ANALYTICS_ENABLED</key>
+	<false></false>
+	<key>IS_APPINVITE_ENABLED</key>
+	<true></true>
+	<key>IS_GCM_ENABLED</key>
+	<true></true>
+	<key>IS_SIGNIN_ENABLED</key>
+	<true></true>
+	<key>GOOGLE_APP_ID</key>
+	<string>1:789283848967:ios:320ba8b4a16662916e7ba2</string>
+</dict>
+</plist>

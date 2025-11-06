@@ -1,0 +1,63 @@
+platform :ios, '15.0'
+# ※ モジュラーヘッダは使わない
+# use_modular_headers!
+
+# Swift Pod を静的フレームワークとして統合して module 要件を回避
+use_frameworks! :linkage => :static
+
+ENV['COCOAPODS_DISABLE_STATS'] = 'true'
+
+project 'Runner', {
+  'Debug' => :debug,
+  'Profile' => :release,
+  'Release' => :release,
+}
+
+def flutter_root
+  generated_xcode_build_settings_path = File.expand_path(File.join('..','Flutter','Generated.xcconfig'), __FILE__)
+  raise "#{generated_xcode_build_settings_path} must exist. If you're running pod install manually, make sure flutter pub get is executed first" unless File.exist?(generated_xcode_build_settings_path)
+  File.foreach(generated_xcode_build_settings_path) do |line|
+    m = line.match(/FLUTTER_ROOT\=(.*)/)
+    return m[1].strip if m
+  end
+  raise "FLUTTER_ROOT not found in #{generated_xcode_build_settings_path}. Try deleting Generated.xcconfig, then run flutter pub get"
+end
+
+require File.expand_path(File.join('packages','flutter_tools','bin','podhelper'), flutter_root)
+flutter_ios_podfile_setup
+
+target 'Runner' do
+  flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
+
+  target 'RunnerTests' do
+    inherit! :search_paths
+  end
+end
+
+post_install do |installer|
+  installer.pods_project.targets.each do |t|
+    flutter_additional_ios_build_settings(t)
+    t.build_configurations.each do |c|
+      c.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
+    end
+  end
+
+  # --- gRPC modulemap パッチ（恒久・冪等）---
+  require 'fileutils'
+  require 'pathname'
+  pr = File.dirname(__FILE__)
+  src = File.join(pr, 'Pods', 'Target Support Files', 'gRPC-Core', 'gRPC-Core.modulemap')
+  dest_dir = File.join(pr, 'Pods', 'Headers', 'Private', 'grpc')
+  dest = File.join(dest_dir, 'gRPC-Core.modulemap')
+
+  if File.exist?(src)
+    FileUtils.mkdir_p(dest_dir)
+    rel = Pathname.new(src).relative_path_from(Pathname.new(dest_dir)).to_s
+    begin
+      FileUtils.rm_f(dest)
+      FileUtils.ln_s(rel, dest)
+    rescue
+      FileUtils.cp(src, dest)
+    end
+  end
+end

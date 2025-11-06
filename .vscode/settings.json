@@ -6,5 +6,6 @@
         "flutterfire",
         "nanikiru",
         "orbitron"
-    ]
+    ],
+    "dart.flutterSdkPath": "/opt/homebrew/share/flutter"
 }
