@@ -7,11 +7,20 @@ class BaseScaffold extends StatefulWidget {
   final Widget body;
   final int currentIndex;
 
+  /// true のとき、本文の上にローディングオーバーレイを表示
+  final bool showLoading;
+
+  /// showLoading が true のときに使うカスタムローディングウィジェット
+  /// null の場合はデフォルトの "Now Loading..." オーバーレイを表示
+  final Widget? loadingChild;
+
   const BaseScaffold({
     Key? key,
     required this.title,
     required this.body,
     required this.currentIndex,
+    this.showLoading = false,
+    this.loadingChild,
   }) : super(key: key);
 
   @override
@@ -27,14 +36,57 @@ class _BaseScaffoldState extends State<BaseScaffold> {
   }
 
   @override
+  void dispose() {
+    _player.dispose();
+    super.dispose();
+  }
+
+  /// デフォルトのローディングオーバーレイ
+  /// 背景に background.png を敷く
+  Widget _buildDefaultLoadingOverlay() {
+    return Container(
+      decoration: const BoxDecoration(
+        image: DecorationImage(
+          image: AssetImage('assets/images/background.png'),
+          fit: BoxFit.cover,
+        ),
+      ),
+      // 少し暗くしてスピナーを目立たせる
+      child: Container(
+        child: const Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(Colors.cyanAccent),
+              ),
+              SizedBox(height: 16),
+              Text(
+                'Now Loading...',
+                style: TextStyle(color: Colors.cyanAccent),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
-    // ← 追加：ステータスバー高（ノッチ等を含む）
+    // ★ BottomNavigationBar のタブ数（ホーム / 投稿 / マイページ）
+    const int bottomNavItemCount = 3;
+
+    // currentIndex を 0〜(bottomNavItemCount-1) の範囲に収める
+    final int safeIndex =
+        widget.currentIndex.clamp(0, bottomNavItemCount - 1) as int;
+
+    // ステータスバー高
     final double topInset = MediaQuery.of(context).padding.top;
     // AppBar 高さ + ステータスバー高 + 余白16
     final double contentTopPadding = topInset + kToolbarHeight + 16;
 
     return Scaffold(
-      // 背景を AppBar の背後まで伸ばしたいので true のまま
       extendBodyBehindAppBar: true,
       backgroundColor: const Color(0xFF0A0E21),
       appBar: AppBar(
@@ -60,7 +112,7 @@ class _BaseScaffoldState extends State<BaseScaffold> {
       ),
       body: Stack(
         children: [
-          // 背景グラデーション（AppBar 背後まで表示される）
+          // 背景グラデーション（AppBar 背後まで）
           Container(
             decoration: const BoxDecoration(
               gradient: LinearGradient(
@@ -70,20 +122,28 @@ class _BaseScaffoldState extends State<BaseScaffold> {
               ),
             ),
           ),
-          // 本文：AppBar + ステータスバー分だけ余白を確保して重なり防止
+          // 本文
           Padding(
             padding: EdgeInsets.only(
               left: 16,
               right: 16,
-              top: contentTopPadding, // ← ここが修正ポイント
+              top: contentTopPadding,
               bottom: 16,
             ),
             child: widget.body,
           ),
+
+          // ★ ローディングオーバーレイ（AppBar & BottomNavBar よりは後ろ）
+          if (widget.showLoading)
+            Positioned.fill(
+              child: AbsorbPointer(
+                absorbing: true, // 下のウィジェットを触れないようにする
+                child: widget.loadingChild ?? _buildDefaultLoadingOverlay(),
+              ),
+            ),
         ],
       ),
-      // 縦固定：常にボトムナビ表示
-      bottomNavigationBar: BottomNavBar(currentIndex: widget.currentIndex),
+      bottomNavigationBar: BottomNavBar(currentIndex: safeIndex),
     );
   }
 }

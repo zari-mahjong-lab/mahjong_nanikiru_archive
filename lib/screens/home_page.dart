@@ -50,7 +50,7 @@ class _HomePageState extends State<HomePage> {
         pageBuilder: (_, __, ___) => DetailPage(
           postId: postId,
           source: 'home',
-          currentIndex: currentIndex,
+          currentIndex: 0, // 0 = Homeタブを光らせる
           navContext: {
             'sortKey': _sortKey,
             'ascending': _ascending,
@@ -343,35 +343,6 @@ class _HomePageState extends State<HomePage> {
         _selectedPostType = result.selectedPostType;
       });
     }
-  }
-
-  // ★ ページ全体ローディング表示（background.png＋水色ぐるぐる）
-  Widget _buildFullPageLoading() {
-    return Container(
-      decoration: const BoxDecoration(
-        image: DecorationImage(
-          image: AssetImage('assets/images/background.png'),
-          fit: BoxFit.cover,
-        ),
-      ),
-      child: const Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            CircularProgressIndicator(
-              valueColor: AlwaysStoppedAnimation<Color>(Colors.cyanAccent),
-            ),
-            SizedBox(height: 16),
-            Text(
-              'Now Loading...',
-              style: TextStyle(
-                color: Colors.cyanAccent,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 
   // ★ エラー表示（ページ完成扱いなのでローディングではなくメッセージ）
@@ -704,58 +675,84 @@ class _HomePageState extends State<HomePage> {
       _selectedRank = '未選択';
     }
 
-    return BaseScaffold(
-      title: '投稿一覧',
-      currentIndex: 0,
-      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: FirebaseFirestore.instance
-            .collection('posts')
-            .orderBy('createdAt', descending: true)
-            .snapshots(),
-        builder: (context, snapshot) {
-          // ★ 1段階目：posts が来るまでページ全体ローディング
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return _buildFullPageLoading();
-          }
-          if (snapshot.hasError) {
-            return _buildErrorPage('読み込みエラー: ${snapshot.error}');
-          }
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('posts')
+          .orderBy('createdAt', descending: true)
+          .snapshots(),
+      builder: (context, snapshot) {
+        final postsLoading =
+            snapshot.connectionState == ConnectionState.waiting;
 
-          final docs = snapshot.data?.docs ?? [];
-          if (docs.isEmpty) {
-            // 投稿 0 件 → ページ完成扱い
-            return _buildMessagePage('投稿がまだありません');
-          }
-
-          // Users のプロフィールが揃うまで、ページ全体ローディング
-          final userIds = <String>{
-            for (final d in docs) (d.data()['userId'] ?? '') as String,
-          }..removeWhere((e) => e.isEmpty);
-
-          return FutureBuilder<Map<String, _UserProfile?>>(
-            future: _loadProfiles(userIds),
-            builder: (context, profSnap) {
-              if (profSnap.connectionState == ConnectionState.waiting) {
-                return _buildFullPageLoading();
-              }
-              if (profSnap.hasError) {
-                return _buildErrorPage(
-                  'ユーザープロフィール読み込みエラー: ${profSnap.error}',
-                );
-              }
-
-              final profiles = profSnap.data ?? {};
-              return _buildPostListPage(docs, profiles);
-            },
+        if (snapshot.hasError) {
+          return BaseScaffold(
+            title: '投稿一覧',
+            currentIndex: 0,
+            body: _buildErrorPage('読み込みエラー: ${snapshot.error}'),
           );
-        },
-      ),
+        }
+
+        final docs = snapshot.data?.docs ?? [];
+
+        // 投稿 0 件（データは取得済み）
+        if (!postsLoading && docs.isEmpty) {
+          return BaseScaffold(
+            title: '投稿一覧',
+            currentIndex: 0,
+            body: _buildMessagePage('投稿がまだありません'),
+          );
+        }
+
+        // posts 取得中で、まだ中身がないとき → オーバーレイだけ出す
+        if (postsLoading && docs.isEmpty) {
+          return const BaseScaffold(
+            title: '投稿一覧',
+            currentIndex: 0,
+            showLoading: true,
+            body: SizedBox.shrink(),
+          );
+        }
+
+        // Users のプロフィールが揃うまで、BaseScaffold のオーバーレイでローディング
+        final userIds = <String>{
+          for (final d in docs) (d.data()['userId'] ?? '') as String,
+        }..removeWhere((e) => e.isEmpty);
+
+        return FutureBuilder<Map<String, _UserProfile?>>(
+          future: _loadProfiles(userIds),
+          builder: (context, profSnap) {
+            final profilesLoading =
+                profSnap.connectionState == ConnectionState.waiting;
+            final showLoadingOverlay = postsLoading || profilesLoading;
+
+            if (profSnap.hasError) {
+              return BaseScaffold(
+                title: '投稿一覧',
+                currentIndex: 0,
+                showLoading: showLoadingOverlay,
+                body: _buildErrorPage(
+                  'ユーザープロフィール読み込みエラー: ${profSnap.error}',
+                ),
+              );
+            }
+
+            final profiles = profSnap.data ?? {};
+            return BaseScaffold(
+              title: '投稿一覧',
+              currentIndex: 0,
+              showLoading: showLoadingOverlay,
+              body: _buildPostListPage(docs, profiles),
+            );
+          },
+        );
+      },
     );
   }
 }
 
 // ====== コントロールモーダル ======
 
+// （以下は元コードから変更なし）
 class _ControlsResult {
   final String sortKey;
   final bool ascending;

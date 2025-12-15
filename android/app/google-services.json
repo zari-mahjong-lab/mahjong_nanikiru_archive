@@ -7,18 +7,26 @@
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:789283848967:android:3736811042c1d31d6e7ba2",
+        "mobilesdk_app_id": "1:789283848967:android:99fa1abe377cbf4d6e7ba2",
         "android_client_info": {
-          "package_name": "com.example.zari_mahjong_lab"
+          "package_name": "jp.zari.mahjong_nanikiru_archive"
         }
       },
       "oauth_client": [
         {
-          "client_id": "789283848967-qdh5q37moa7a07m0go156mtqfm3bqvpi.apps.googleusercontent.com",
+          "client_id": "789283848967-i8s27qc3cvrm33f8nrej87sq4gqlfcf8.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
-            "package_name": "com.example.zari_mahjong_lab",
+            "package_name": "jp.zari.mahjong_nanikiru_archive",
             "certificate_hash": "24560340a936515096fb0d6332e0cae82bf3fee7"
+          }
+        },
+        {
+          "client_id": "789283848967-kr5pvg90r7ff0qipjlqjf286f4082mt4.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "jp.zari.mahjong_nanikiru_archive",
+            "certificate_hash": "36f59ee38557c497e399b933841d00d6ed3f1ee3"
           }
         },
         {

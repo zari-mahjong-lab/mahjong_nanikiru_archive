@@ -508,6 +508,46 @@ class _PostEditPageState extends State<PostEditPage> {
     });
   }
 
+  // 🔹 牌姿画像タップで拡大表示
+  void _showFullImage() {
+    showDialog(
+      context: context,
+      barrierColor: Colors.black.withOpacity(0.85),
+      builder: (ctx) {
+        return GestureDetector(
+          onTap: () => Navigator.of(ctx).pop(), // どこタップでも閉じる
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: Container(color: Colors.black.withOpacity(0.95)),
+              ),
+              Center(
+                child: InteractiveViewer(
+                  panEnabled: true,
+                  minScale: 1.0,
+                  maxScale: 4.0,
+                  child: Image.file(
+                    widget.imageFile,
+                    fit: BoxFit.contain,
+                  ),
+                ),
+              ),
+              Positioned(
+                top: 24,
+                right: 16,
+                child: Icon(
+                  Icons.close,
+                  color: Colors.white70,
+                  size: 28,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   Future<void> _savePost() async {
     try {
       // 🔸 未設定牌チェック
@@ -674,297 +714,310 @@ class _PostEditPageState extends State<PostEditPage> {
         child: _isLoading
             ? const Center(child: CircularProgressIndicator())
             : _error != null
-            ? Center(
-                child: Text(_error!, style: const TextStyle(color: Colors.red)),
-              )
-            : SingleChildScrollView(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
-                      child: Image.file(
-                        widget.imageFile,
-                        width: double.infinity,
-                        fit: BoxFit.fitWidth,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-
-                    _buildLabel('ルール'),
-                    Wrap(
-                      spacing: 16,
+                ? Center(
+                    child:
+                        Text(_error!, style: const TextStyle(color: Colors.red)),
+                  )
+                : SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        '四麻・半荘',
-                        '四麻・東風',
-                        '三麻',
-                      ].map((label) => _buildRuleRadio(label)).toList(),
-                    ),
-                    const SizedBox(height: 24),
-
-                    _buildLabel('問題タイプ'),
-                    Wrap(
-                      spacing: 16,
-                      children: [
-                        '牌効率',
-                        '押し引き',
-                        'リーチ判断',
-                        '副露判断',
-                        'アシスト',
-                        'その他',
-                      ].map((label) => _buildRadio(label)).toList(),
-                    ),
-                    const SizedBox(height: 16),
-
-                    _buildLabel('問題の補足'),
-                    const SizedBox(height: 8),
-                    TextField(
-                      controller: _descriptionController,
-                      maxLength: 200, // 🔹 200文字制限を追加
-                      maxLines: 3,
-                      style: const TextStyle(color: Colors.white),
-                      decoration: _inputDecoration(
-                        '例：ラス回避ルール、1-3 チップ5000点相当、一発裏無し など（200文字以内）',
-                      ),
-                    ),
-
-                    const SizedBox(height: 24),
-
-                    // ====== 手牌編集 + 副露ボタン ======
-                    _buildLabel('牌を確認・修正してください'),
-                    const SizedBox(height: 8),
-
-                    // 副露ボタン（ラベルの直下）
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        _meldBtn('チー', () => _startMeld(MeldAction.chi)),
-                        _meldBtn('ポン', () => _startMeld(MeldAction.pon)),
-                        _meldBtn('明カン', () => _startMeld(MeldAction.minkan)),
-                        _meldBtn('暗カン', () => _startMeld(MeldAction.ankan)),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-
-                    // 左：手牌編集　右：副露表示（解除ボタンあり）
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.end, // ★底辺揃え
-                      children: [
-                        Expanded(
-                          child: _HandStripEditor(
-                            tiles: _tiles,
-                            onPickAt: _pickTileAt,
-                            onReorder: _onReorderTiles,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        _MeldDisplayColumn(
-                          groups: _meldGroups,
-                          showRemove: true, // ← 上段は解除可能
-                          onRemove: _removeMeldAt,
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 24),
-                    // ====== /手牌編集 ======
-
-                    // リーチ判断のときだけ「する/しない」
-                    if (_postType == 'リーチ判断') ...[
-                      _buildLabel('リーチする？'),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 12,
-                        children: [
-                          ChoiceChip(
-                            selected: _reachChoice == true,
-                            label: const Text('する'),
-                            onSelected: (_) =>
-                                setState(() => _reachChoice = true),
-                            selectedColor: Colors.cyanAccent.withOpacity(0.25),
-                            labelStyle: TextStyle(
-                              color: _reachChoice == true
-                                  ? Colors.cyanAccent
-                                  : Colors.white,
-                              fontWeight: FontWeight.bold,
+                        // 🔹 牌姿画像タップで拡大
+                        GestureDetector(
+                          onTap: _showFullImage,
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: Image.file(
+                              widget.imageFile,
+                              width: double.infinity,
+                              fit: BoxFit.fitWidth,
                             ),
                           ),
-                          ChoiceChip(
-                            selected: _reachChoice == false,
-                            label: const Text('しない'),
-                            onSelected: (_) =>
-                                setState(() => _reachChoice = false),
-                            selectedColor: Colors.cyanAccent.withOpacity(0.25),
-                            labelStyle: TextStyle(
-                              color: _reachChoice == false
-                                  ? Colors.cyanAccent
-                                  : Colors.white,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 16),
-                    ],
-
-                    // 副露判断 UI（既存）
-                    if (_postType == '副露判断') ...[
-                      _buildLabel('鳴く？'),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 12,
-                        children: [
-                          ChoiceChip(
-                            selected: _callChoice == true,
-                            label: const Text('鳴く'),
-                            onSelected: (_) => setState(() {
-                              _callChoice = true;
-                            }),
-                            selectedColor: Colors.cyanAccent.withOpacity(0.25),
-                            labelStyle: TextStyle(
-                              color: _callChoice == true
-                                  ? Colors.cyanAccent
-                                  : Colors.white,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          ChoiceChip(
-                            selected: _callChoice == false,
-                            label: const Text('スルー'),
-                            onSelected: (_) => setState(() {
-                              _callChoice = false;
-                              _meldIndices.clear();
-                              _discardIndex = null;
-                            }),
-                            selectedColor: Colors.cyanAccent.withOpacity(0.25),
-                            labelStyle: TextStyle(
-                              color: _callChoice == false
-                                  ? Colors.cyanAccent
-                                  : Colors.white,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 16),
-
-                      if (_callChoice == true) ...[
-                        _buildLabel('鳴きに使う牌を2枚選んでください'),
-                        const SizedBox(height: 8),
-                        _MeldPickerRowCheckMark(
-                          // ← チェックマーク表示（下端そろえ）
-                          tiles: _hand,
-                          selectedIndices: _meldIndices,
-                          onToggle: (i) {
-                            setState(() {
-                              if (_meldIndices.contains(i)) {
-                                _meldIndices.remove(i);
-                              } else if (_meldIndices.length < 2) {
-                                _meldIndices.add(i);
-                              }
-                              if (_discardIndex != null &&
-                                  _meldIndices.contains(_discardIndex)) {
-                                _discardIndex = null;
-                              }
-                            });
-                          },
                         ),
                         const SizedBox(height: 16),
-                        _buildLabel('切る牌を1枚選んでください'),
+
+                        _buildLabel('ルール'),
+                        Wrap(
+                          spacing: 16,
+                          children: [
+                            '四麻・半荘',
+                            '四麻・東風',
+                            '三麻',
+                          ].map((label) => _buildRuleRadio(label)).toList(),
+                        ),
+                        const SizedBox(height: 24),
+
+                        _buildLabel('問題タイプ'),
+                        Wrap(
+                          spacing: 16,
+                          children: [
+                            '牌効率',
+                            '押し引き',
+                            'リーチ判断',
+                            '副露判断',
+                            'アシスト',
+                            'その他',
+                          ].map((label) => _buildRadio(label)).toList(),
+                        ),
+                        const SizedBox(height: 16),
+
+                        _buildLabel('問題の補足'),
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: _descriptionController,
+                          maxLength: 200, // 🔹 200文字制限
+                          maxLines: 4, // 🔴 ここを 3 → 4 に変更
+                          style: const TextStyle(color: Colors.white),
+                          decoration: _inputDecoration(
+                            '例：ラス回避ルール、1-3 チップ5000点相当、一発裏無し など（200文字以内）',
+                          ),
+                        ),
+
+                        const SizedBox(height: 24),
+
+                        // ====== 手牌編集 + 副露ボタン ======
+                        _buildLabel('牌を確認・修正してください'),
                         const SizedBox(height: 8),
 
-                        // 左：選択列　右：副露表示（解除ボタンなし）
+                        // 副露ボタン（ラベルの直下）
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            _meldBtn('チー', () => _startMeld(MeldAction.chi)),
+                            _meldBtn('ポン', () => _startMeld(MeldAction.pon)),
+                            _meldBtn(
+                                '明カン', () => _startMeld(MeldAction.minkan)),
+                            _meldBtn('暗カン', () => _startMeld(MeldAction.ankan)),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+
+                        // 左：手牌編集　右：副露表示（解除ボタンあり）
                         Row(
                           crossAxisAlignment: CrossAxisAlignment.end, // ★底辺揃え
                           children: [
                             Expanded(
-                              child: _AnswerTileSelectorRowIndexed(
-                                tiles: _hand,
-                                disabled: _meldIndices.toSet(),
-                                selectedIndex: _discardIndex,
-                                onSelectedIndex: (i) =>
-                                    setState(() => _discardIndex = i),
+                              child: _HandStripEditor(
+                                tiles: _tiles,
+                                onPickAt: _pickTileAt,
+                                onReorder: _onReorderTiles,
                               ),
                             ),
                             const SizedBox(width: 8),
                             _MeldDisplayColumn(
                               groups: _meldGroups,
-                              showRemove: false, // ← 下段は解除表示なし
+                              showRemove: true, // ← 上段は解除可能
+                              onRemove: _removeMeldAt,
                             ),
                           ],
                         ),
                         const SizedBox(height: 24),
-                      ],
-                    ],
+                        // ====== /手牌編集 ======
 
-                    // 通常系の「あなたが切った牌」
-                    if (_postType != '副露判断') ...[
-                      _buildLabel('切る牌を1枚選んでください'),
-                      const SizedBox(height: 8),
+                        // リーチ判断のときだけ「する/しない」
+                        if (_postType == 'リーチ判断') ...[
+                          _buildLabel('リーチする？'),
+                          const SizedBox(height: 8),
+                          Wrap(
+                            spacing: 12,
+                            children: [
+                              ChoiceChip(
+                                selected: _reachChoice == true,
+                                label: const Text('する'),
+                                onSelected: (_) =>
+                                    setState(() => _reachChoice = true),
+                                selectedColor:
+                                    Colors.cyanAccent.withOpacity(0.25),
+                                labelStyle: TextStyle(
+                                  color: _reachChoice == true
+                                      ? Colors.cyanAccent
+                                      : Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              ChoiceChip(
+                                selected: _reachChoice == false,
+                                label: const Text('しない'),
+                                onSelected: (_) =>
+                                    setState(() => _reachChoice = false),
+                                selectedColor:
+                                    Colors.cyanAccent.withOpacity(0.25),
+                                labelStyle: TextStyle(
+                                  color: _reachChoice == false
+                                      ? Colors.cyanAccent
+                                      : Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 16),
+                        ],
 
-                      // 左：選択列　右：副露表示（解除ボタンなし）
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.end, // ★底辺揃え
-                        children: [
-                          Expanded(
-                            child: _AnswerTileSelectorRow(
+                        // 副露判断 UI（既存）
+                        if (_postType == '副露判断') ...[
+                          _buildLabel('鳴く？'),
+                          const SizedBox(height: 8),
+                          Wrap(
+                            spacing: 12,
+                            children: [
+                              ChoiceChip(
+                                selected: _callChoice == true,
+                                label: const Text('鳴く'),
+                                onSelected: (_) => setState(() {
+                                  _callChoice = true;
+                                }),
+                                selectedColor:
+                                    Colors.cyanAccent.withOpacity(0.25),
+                                labelStyle: TextStyle(
+                                  color: _callChoice == true
+                                      ? Colors.cyanAccent
+                                      : Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              ChoiceChip(
+                                selected: _callChoice == false,
+                                label: const Text('スルー'),
+                                onSelected: (_) => setState(() {
+                                  _callChoice = false;
+                                  _meldIndices.clear();
+                                  _discardIndex = null;
+                                }),
+                                selectedColor:
+                                    Colors.cyanAccent.withOpacity(0.25),
+                                labelStyle: TextStyle(
+                                  color: _callChoice == false
+                                      ? Colors.cyanAccent
+                                      : Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 16),
+
+                          if (_callChoice == true) ...[
+                            _buildLabel('鳴きに使う牌を2枚選んでください'),
+                            const SizedBox(height: 8),
+                            _MeldPickerRowCheckMark(
+                              // ← チェックマーク表示（下端そろえ）
                               tiles: _hand,
-                              selected: _answerTile,
-                              onSelected: (id) =>
-                                  setState(() => _answerTile = id),
+                              selectedIndices: _meldIndices,
+                              onToggle: (i) {
+                                setState(() {
+                                  if (_meldIndices.contains(i)) {
+                                    _meldIndices.remove(i);
+                                  } else if (_meldIndices.length < 2) {
+                                    _meldIndices.add(i);
+                                  }
+                                  if (_discardIndex != null &&
+                                      _meldIndices.contains(_discardIndex)) {
+                                    _discardIndex = null;
+                                  }
+                                });
+                              },
+                            ),
+                            const SizedBox(height: 16),
+                            _buildLabel('切る牌を1枚選んでください'),
+                            const SizedBox(height: 8),
+
+                            // 左：選択列　右：副露表示（解除ボタンなし）
+                            Row(
+                              crossAxisAlignment:
+                                  CrossAxisAlignment.end, // ★底辺揃え
+                              children: [
+                                Expanded(
+                                  child: _AnswerTileSelectorRowIndexed(
+                                    tiles: _hand,
+                                    disabled: _meldIndices.toSet(),
+                                    selectedIndex: _discardIndex,
+                                    onSelectedIndex: (i) =>
+                                        setState(() => _discardIndex = i),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                _MeldDisplayColumn(
+                                  groups: _meldGroups,
+                                  showRemove: false, // ← 下段は解除表示なし
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 24),
+                          ],
+                        ],
+
+                        // 通常系の「あなたが切った牌」
+                        if (_postType != '副露判断') ...[
+                          _buildLabel('切る牌を1枚選んでください'),
+                          const SizedBox(height: 8),
+
+                          // 左：選択列　右：副露表示（解除ボタンなし）
+                          Row(
+                            crossAxisAlignment:
+                                CrossAxisAlignment.end, // ★底辺揃え
+                            children: [
+                              Expanded(
+                                child: _AnswerTileSelectorRow(
+                                  tiles: _hand,
+                                  selected: _answerTile,
+                                  onSelected: (id) =>
+                                      setState(() => _answerTile = id),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              _MeldDisplayColumn(
+                                groups: _meldGroups,
+                                showRemove: false,
+                              ),
+                            ],
+                          ),
+
+                          const SizedBox(height: 16),
+                        ],
+
+                        _buildLabel('コメント（理由など）'),
+                        TextField(
+                          controller: _answerCommentController,
+                          maxLength: 200, // 🔹 200文字制限を追加
+                          maxLines: 2,
+                          style: const TextStyle(color: Colors.white),
+                          decoration: _inputDecoration(
+                            '例：受け入れ枚数では劣るが打点差が大きく、局収支期待値では勝ると判断した など（200文字以内）',
+                          ),
+                        ),
+
+                        const SizedBox(height: 32),
+                        Center(
+                          child: ElevatedButton.icon(
+                            onPressed: _savePost,
+                            icon: const Icon(Icons.save),
+                            label: const Text('投稿内容を保存する'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.cyanAccent,
+                              foregroundColor: Colors.black,
                             ),
                           ),
-                          const SizedBox(width: 8),
-                          _MeldDisplayColumn(
-                            groups: _meldGroups,
-                            showRemove: false,
-                          ),
-                        ],
-                      ),
-
-                      const SizedBox(height: 16),
-                    ],
-
-                    _buildLabel('コメント（理由など）'),
-                    TextField(
-                      controller: _answerCommentController,
-                      maxLength: 200, // 🔹 200文字制限を追加
-                      maxLines: 2,
-                      style: const TextStyle(color: Colors.white),
-                      decoration: _inputDecoration(
-                        '例：受け入れ枚数では劣るが打点差が大きく、局収支期待値では勝ると判断した など（200文字以内）',
-                      ),
-                    ),
-
-                    const SizedBox(height: 32),
-                    Center(
-                      child: ElevatedButton.icon(
-                        onPressed: _savePost,
-                        icon: const Icon(Icons.save),
-                        label: const Text('投稿内容を保存する'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.cyanAccent,
-                          foregroundColor: Colors.black,
                         ),
-                      ),
+                      ],
                     ),
-                  ],
-                ),
-              ),
+                  ),
       ),
     );
   }
 
   Widget _meldBtn(String text, VoidCallback onTap) => ElevatedButton(
-    onPressed: onTap,
-    style: ElevatedButton.styleFrom(
-      backgroundColor: const Color(0xFF1A2530),
-      foregroundColor: Colors.white,
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-    ),
-    child: Text(text),
-  );
+        onPressed: onTap,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: const Color(0xFF1A2530),
+          foregroundColor: Colors.white,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
+        child: Text(text),
+      );
 
   Widget _buildLabel(String text) =>
       Text(text, style: const TextStyle(fontSize: 16, color: Colors.white));
@@ -1393,7 +1446,6 @@ class _AnswerTileSelectorRowIndexed extends StatelessWidget {
             child: Opacity(
               opacity: isDisabled ? 0.35 : 1.0,
               child: Container(
-                // 🔸 隙間をなくすため margin を削除
                 decoration: BoxDecoration(
                   border: Border(
                     bottom: BorderSide(

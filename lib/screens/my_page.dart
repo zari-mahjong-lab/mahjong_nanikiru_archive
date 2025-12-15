@@ -1,4 +1,7 @@
 // lib/screens/my_page.dart
+import 'dart:async';
+
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:audioplayers/audioplayers.dart';
@@ -7,6 +10,10 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 
 import '../providers/guest_provider.dart';
+import '../providers/premium_provider.dart';
+import '../services/purchase_service.dart';
+import '../config/build_config.dart'; // ★これを追加
+
 import '../widgets/base_scaffold.dart';
 import '../screens/detail_page.dart';
 import '../screens/profile_edit_page.dart';
@@ -29,33 +36,19 @@ class MyPage extends StatefulWidget {
 
 class _MyPageState extends State<MyPage> {
   final _parentScroll = ScrollController();
+  final AudioPlayer _player = AudioPlayer();
+
+  bool _billingBusy = false; // 課金処理中フラグ
+
+  @override
+  void initState() {
+    super.initState();
+    // 課金SDK 初期化（複数回呼んでも安全）
+    unawaited(PurchaseService.I.init());
+  }
 
   Future<void> _playSE(AudioPlayer player) async {
     await player.play(AssetSource('sounds/cyber_click.mp3'));
-  }
-
-  // ★ HomePage と同じテイストの「ページ全体ローディング」
-  Widget _buildFullPageLoading() {
-    return Container(
-      decoration: const BoxDecoration(
-        image: DecorationImage(
-          image: AssetImage('assets/images/background.png'),
-          fit: BoxFit.cover,
-        ),
-      ),
-      child: const Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            CircularProgressIndicator(
-              valueColor: AlwaysStoppedAnimation<Color>(Colors.cyanAccent),
-            ),
-            SizedBox(height: 16),
-            Text('Now Loading...', style: TextStyle(color: Colors.cyanAccent)),
-          ],
-        ),
-      ),
-    );
   }
 
   // ★ エラー時もページ全体で表示
@@ -125,14 +118,141 @@ class _MyPageState extends State<MyPage> {
     }
   }
 
+  // ====== 課金処理（本番用） ======
+  Future<void> _buyPremium() async {
+    if (_billingBusy) return;
+    setState(() => _billingBusy = true);
+    try {
+      await PurchaseService.I.buyPremium();
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('購入処理を開始しました。')));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('購入に失敗しました: $e')));
+    } finally {
+      if (mounted) setState(() => _billingBusy = false);
+    }
+  }
+
+  Future<void> _restore() async {
+    if (_billingBusy) return;
+    setState(() => _billingBusy = true);
+    try {
+      await PurchaseService.I.restore();
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('購入情報を復元しました。')));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('復元に失敗しました: $e')));
+    } finally {
+      if (mounted) setState(() => _billingBusy = false);
+    }
+  }
+
+  Future<void> _deleteAccountAndData() async {
+    await _playSE(_player);
+
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    // 確認ダイアログ
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A1A),
+        title: const Text(
+          'アカウントを削除しますか？',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: const Text(
+          'このアカウントとユーザーデータ（usersドキュメント）を削除します。\n'
+          '一度削除すると元に戻すことはできません。',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text(
+              'キャンセル',
+              style: TextStyle(color: Colors.cyanAccent),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text(
+              '削除する',
+              style: TextStyle(color: Colors.redAccent),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (ok != true) return;
+
+    final uid = user.uid;
+    final db = FirebaseFirestore.instance;
+
+    try {
+      // ① Firestore の users ドキュメント削除
+      await db.collection('users').doc(uid).delete().catchError((_) {});
+
+      // ② Firebase Authentication のユーザー削除
+      await user.delete();
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('アカウントを削除しました')));
+
+      // ③ ルートに戻す
+      context.read<GuestProvider>().setGuest(false);
+      Navigator.pushAndRemoveUntil(
+        context,
+        _noAnimRoute(const TitlePage()),
+        (_) => false,
+      );
+    } on FirebaseAuthException catch (e) {
+      if (!mounted) return;
+      String msg;
+      if (e.code == 'requires-recent-login') {
+        msg =
+            'アカウント削除には再ログインが必要です。\n'
+            '一度ログアウトしてから、再度ログインし直してください。';
+      } else {
+        msg = 'アカウント削除に失敗しました (${e.code})';
+      }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('アカウント削除に失敗しました: $e')));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isGuest = context.watch<GuestProvider>().isGuest;
+    final premiumProvider = context.watch<PremiumProvider>();
+    final isPremium = premiumProvider.isPremium;
+    final serverIsPremium = premiumProvider.serverIsPremium; // ★追加
+    final debugOverride = premiumProvider.debugOverride; // ★追加
+
     final user = FirebaseAuth.instance.currentUser;
-    final player = AudioPlayer();
 
     // ゲストモード時はこれまでどおり即表示
     if (isGuest || user == null) {
+      final player = _player;
       return BaseScaffold(
         title: 'マイページ',
         currentIndex: 2,
@@ -179,28 +299,24 @@ class _MyPageState extends State<MyPage> {
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
       stream: docStream,
       builder: (context, snap) {
-        // ★ ここでページ単位ローディングを挟む
-        if (snap.connectionState == ConnectionState.waiting) {
-          return BaseScaffold(
-            title: 'マイページ',
-            currentIndex: 2,
-            body: _buildFullPageLoading(),
-          );
-        }
+        // ★ BaseScaffold の showLoading で画面全体オーバーレイ
+        final bool isLoading = snap.connectionState == ConnectionState.waiting;
+
         if (snap.hasError) {
           return BaseScaffold(
             title: 'マイページ',
             currentIndex: 2,
+            showLoading: false,
             body: _buildErrorPage('読み込みエラー: ${snap.error}'),
           );
         }
 
-        // ここから先は「ユーザードキュメントが取れてから」だけ実行される
+        // ユーザードキュメント（ローディング中は空マップ）
         final data = snap.data?.data() ?? const <String, dynamic>{};
         final nickname =
             (data['nickname'] as String?) ?? (user.displayName ?? 'ユーザー');
         final iconUrl = (data['iconUrl'] as String?) ?? user.photoURL;
-        final isPremium = (data['isPremium'] as bool?) ?? false;
+        final isPremium = premiumProvider.isPremium;
 
         final affiliationsRaw = (data['affiliations'] as List?) ?? const [];
         final affiliations = affiliationsRaw
@@ -213,50 +329,10 @@ class _MyPageState extends State<MyPage> {
             )
             .toList();
 
-        // MyPage._MyPageState 内の setPremiumDebug
-        Future<void> setPremiumDebug(bool v) async {
-          try {
-            // ignore: unawaited_futures
-            player.play(AssetSource('sounds/cyber_click.mp3'));
-          } catch (_) {}
-
-          final doc = FirebaseFirestore.instance.collection('users').doc(uid);
-
-          try {
-            if (v) {
-              await doc.set({
-                'isPremium': true,
-                'premiumActivatedAt': FieldValue.serverTimestamp(),
-                'premiumDebug': true,
-              }, SetOptions(merge: true));
-            } else {
-              await doc.set({
-                'isPremium': false,
-                'premiumDebug': true,
-              }, SetOptions(merge: true));
-              await doc.update({'premiumActivatedAt': FieldValue.delete()});
-            }
-
-            if (!mounted) return;
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(v ? 'プレミアムを有効化（テスト）' : 'プレミアムを無効化（テスト）')),
-            );
-          } on FirebaseException catch (e) {
-            if (!mounted) return;
-            ScaffoldMessenger.of(
-              context,
-            ).showSnackBar(SnackBar(content: Text('書き込み失敗: ${e.code}')));
-          } catch (e) {
-            if (!mounted) return;
-            ScaffoldMessenger.of(
-              context,
-            ).showSnackBar(SnackBar(content: Text('書き込み失敗: $e')));
-          }
-        }
-
         return BaseScaffold(
           title: 'マイページ',
           currentIndex: 2,
+          showLoading: isLoading, // ★ここでローディングオーバーレイON/OFF
           body: Center(
             child: SingleChildScrollView(
               controller: _parentScroll,
@@ -336,7 +412,7 @@ class _MyPageState extends State<MyPage> {
                   // アカウント編集
                   ElevatedButton.icon(
                     onPressed: () async {
-                      await _playSE(player);
+                      await _playSE(_player);
                       if (!mounted) return;
                       Navigator.push(
                         context,
@@ -353,12 +429,31 @@ class _MyPageState extends State<MyPage> {
 
                   const SizedBox(height: 24),
 
-                  // ====== 課金ボタン（エミュ用の疑似動作） ======
-                  _PremiumCardDebug(
+                  // ====== 課金カード（本番用） ======
+                  _PremiumCard(
                     isPremium: isPremium,
-                    onActivate: () => setPremiumDebug(true),
-                    onDeactivate: () => setPremiumDebug(false),
+                    busy: _billingBusy,
+                    priceText: PurchaseService.I.formattedPrice(),
+                    onBuy: _buyPremium,
+                    onRestore: _restore,
                   ),
+
+                  // ====== デバッグ用プレミアム切替（リリースビルドでは非表示） ======
+                  if (kDebugMode) ...[
+                    const SizedBox(height: 12),
+                    _PremiumDebugCard(
+                      isPremium: isPremium,
+                      serverIsPremium: serverIsPremium,
+                      debugOverride: debugOverride,
+                      onForceOn: () =>
+                          context.read<PremiumProvider>().setDebugPremium(true),
+                      onForceOff: () => context
+                          .read<PremiumProvider>()
+                          .setDebugPremium(false),
+                      onClear: () =>
+                          context.read<PremiumProvider>().setDebugPremium(null),
+                    ),
+                  ],
 
                   const SizedBox(height: 24),
 
@@ -386,7 +481,7 @@ class _MyPageState extends State<MyPage> {
                   const SizedBox(height: 12),
                   _FavoritePostsList(
                     uid: uid,
-                    player: player,
+                    player: _player,
                     parent: _parentScroll,
                   ),
 
@@ -409,7 +504,7 @@ class _MyPageState extends State<MyPage> {
                   if (isPremium)
                     _MyPostHistoryList(
                       uid: uid,
-                      player: player,
+                      player: _player,
                       parent: _parentScroll,
                     )
                   else
@@ -420,7 +515,7 @@ class _MyPageState extends State<MyPage> {
                   // ログアウト
                   ElevatedButton.icon(
                     onPressed: () async {
-                      await _playSE(player);
+                      await _playSE(_player);
                       await FirebaseAuth.instance.signOut();
                       if (!mounted) return;
                       context.read<GuestProvider>().setGuest(false);
@@ -438,6 +533,20 @@ class _MyPageState extends State<MyPage> {
                       foregroundColor: Colors.white,
                     ),
                   ),
+                  // アカウント削除（ログイン時のみ表示される領域）
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    onPressed: _deleteAccountAndData,
+                    icon: const Icon(Icons.delete_forever),
+                    label: const Text('アカウントとユーザーデータを削除'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.redAccent,
+                      side: const BorderSide(
+                        color: Colors.redAccent,
+                        width: 1.4,
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -450,23 +559,38 @@ class _MyPageState extends State<MyPage> {
   @override
   void dispose() {
     _parentScroll.dispose();
+    _player.dispose();
     super.dispose();
   }
 }
 
-// ===== 課金カード（デバッグ用）=====
-class _PremiumCardDebug extends StatelessWidget {
+// ===== 課金カード（本番用）=====
+class _PremiumCard extends StatelessWidget {
   final bool isPremium;
-  final VoidCallback onActivate;
-  final VoidCallback onDeactivate;
-  const _PremiumCardDebug({
+  final bool busy;
+  final String? priceText;
+  final VoidCallback onBuy;
+  final VoidCallback onRestore;
+
+  const _PremiumCard({
     required this.isPremium,
-    required this.onActivate,
-    required this.onDeactivate,
+    required this.busy,
+    required this.priceText,
+    required this.onBuy,
+    required this.onRestore,
   });
 
   @override
   Widget build(BuildContext context) {
+    final priceLabel = priceText ?? '¥---/月';
+    final isFreeTest = kFreePremiumForClosedTest; // ★追加
+
+    final description = isFreeTest
+        ? 'クローズドテスト中につき、すべてのユーザーでプレミアム機能を無料開放しています。'
+        : (isPremium
+              ? 'プレミアムが有効です。全ての機能をご利用いただけます。'
+              : '画像解析による何切る問題投稿、何切る問題への回答などの機能が開放されます。');
+
     return Container(
       constraints: const BoxConstraints(maxWidth: 560),
       padding: const EdgeInsets.all(16),
@@ -490,7 +614,7 @@ class _PremiumCardDebug extends StatelessWidget {
               Icon(Icons.workspace_premium, color: Colors.cyanAccent),
               SizedBox(width: 8),
               Text(
-                'プレミアム会員（テスト切替）',
+                'プレミアム会員プラン',
                 style: TextStyle(
                   color: Colors.white,
                   fontSize: 16,
@@ -500,30 +624,31 @@ class _PremiumCardDebug extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 8),
-          Text(
-            isPremium
-                ? '現在：プレミアムが有効です。全機能をご利用いただけます。'
-                : '現在：無料プランです。下記ボタンでテスト的にプレミアムを有効化できます。',
-            style: const TextStyle(color: Colors.white70),
-          ),
+          Text(description, style: const TextStyle(color: Colors.white70)),
           const SizedBox(height: 12),
           Row(
             children: [
-              if (!isPremium)
-                ElevatedButton.icon(
-                  onPressed: onActivate,
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: (isPremium || busy || isFreeTest) ? null : onBuy,
                   icon: const Icon(Icons.lock_open),
-                  label: const Text('プレミアムを有効化（テスト）'),
+                  label: Text(
+                    isFreeTest
+                        ? 'クローズドテスト中（自動開放）'
+                        : (isPremium ? '購入済み' : '購入する ($priceLabel)'),
+                  ),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.cyanAccent,
                     foregroundColor: Colors.black,
                   ),
                 ),
-              if (isPremium)
+              ),
+              const SizedBox(width: 12),
+              if (!isFreeTest) // ★無料開放中は復元ボタンも隠す
                 OutlinedButton.icon(
-                  onPressed: onDeactivate,
-                  icon: const Icon(Icons.lock_reset, color: Colors.cyanAccent),
-                  label: const Text('プレミアムを無効化（テスト）'),
+                  onPressed: busy ? null : onRestore,
+                  icon: const Icon(Icons.refresh, color: Colors.cyanAccent),
+                  label: const Text('復元'),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: Colors.cyanAccent,
                     side: const BorderSide(
@@ -533,6 +658,107 @@ class _PremiumCardDebug extends StatelessWidget {
                   ),
                 ),
             ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ===== 課金カード（デバッグ用：kDebugMode のときだけ表示）=====
+class _PremiumDebugCard extends StatelessWidget {
+  final bool isPremium;
+  final bool serverIsPremium;
+  final bool? debugOverride;
+  final VoidCallback onForceOn;
+  final VoidCallback onForceOff;
+  final VoidCallback onClear;
+
+  const _PremiumDebugCard({
+    required this.isPremium,
+    required this.serverIsPremium,
+    required this.debugOverride,
+    required this.onForceOn,
+    required this.onForceOff,
+    required this.onClear,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    String overrideLabel;
+    if (debugOverride == null) {
+      overrideLabel = '未指定（サーバー値を使用）';
+    } else if (debugOverride == true) {
+      overrideLabel = '強制ON';
+    } else {
+      overrideLabel = '強制OFF';
+    }
+
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 560),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.30),
+        border: Border.all(color: Colors.greenAccent, width: 1.5),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.bug_report, color: Colors.greenAccent),
+              SizedBox(width: 8),
+              Text(
+                'デバッグ用プレミアム切替 (Debug Build Only)',
+                style: TextStyle(
+                  color: Colors.greenAccent,
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'serverPremium = $serverIsPremium / override = $overrideLabel\n'
+            '⇒ 最終 isPremium = $isPremium',
+            style: const TextStyle(color: Colors.white70, fontSize: 12),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                onPressed: onForceOn,
+                icon: const Icon(Icons.lock_open, color: Colors.greenAccent),
+                label: const Text(
+                  '強制ON',
+                  style: TextStyle(color: Colors.greenAccent),
+                ),
+              ),
+              OutlinedButton.icon(
+                onPressed: onForceOff,
+                icon: const Icon(Icons.lock_reset, color: Colors.redAccent),
+                label: const Text(
+                  '強制OFF',
+                  style: TextStyle(color: Colors.redAccent),
+                ),
+              ),
+              OutlinedButton(
+                onPressed: onClear,
+                child: const Text(
+                  '解除（サーバー値）',
+                  style: TextStyle(color: Colors.white70),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            '※ デバッグビルドのみ。Firestore の isPremium は変更しません。',
+            style: TextStyle(color: Colors.white54, fontSize: 11),
           ),
         ],
       ),

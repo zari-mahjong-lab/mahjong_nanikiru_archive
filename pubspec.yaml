@@ -1,8 +1,8 @@
 name: mahjong_nanikiru_archive
-description: "A new Flutter project."
+description: 麻雀立体何切るアーカイブ
 publish_to: "none"
 
-version: 1.0.0+1
+version: 1.0.0+7
 
 environment:
   sdk: ^3.8.1
@@ -41,11 +41,14 @@ dependencies:
 
   shared_preferences: ^2.3.2
   dio: ^5.7.0
+  google_mobile_ads: ^5.0.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
+  flutter_native_splash: ^2.4.7
 
 flutter:
   uses-material-design: true
@@ -55,3 +58,31 @@ flutter:
     - assets/images/logo.png
     - assets/sounds/cyber_start.mp3
     - assets/sounds/cyber_click.mp3
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/images/app_icon.png"  # ここは使いたいアイコン画像に合わせて変更
+  min_sdk_android: 21
+
+  # （任意）Android 8+ のアダプティブアイコン用
+  adaptive_icon_background: "#020711"      # ダークネイビー系の背景色
+  adaptive_icon_foreground: "assets/images/app_icon.png"
+
+flutter_native_splash:
+  # 対応プラットフォーム
+  android: true
+  ios: true
+  web: false
+
+  # スプラッシュの背景色（アプリ全体のダークネイビーに合わせる）
+  color: "#020711"
+
+  # 画面中央に出すロゴ画像
+  # まずは既存の logo.png をそのまま使う方針でいきましょう
+  image: assets/images/app_icon.png
+
+  # Android 12 以降の専用スプラッシュ設定
+  android_12:
+    color: "#020711"
+    image: assets/images/app_icon.png

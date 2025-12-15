@@ -6,8 +6,11 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart'; // ← 3投稿ごとの広告カウント用
+import 'package:provider/provider.dart';
 
+import '../providers/premium_provider.dart';
 import '../widgets/base_scaffold.dart';
+import '../services/interstitial_ad_service.dart'; // ★ 追加
 
 // ===== Mini profile (トップレベル) =====
 class _MiniProfile {
@@ -64,8 +67,8 @@ class _DetailPageState extends State<DetailPage> {
   // タイプ別回答UI用
   final ValueNotifier<bool?> _reach = ValueNotifier<bool?>(null);
   final ValueNotifier<bool?> _call = ValueNotifier<bool?>(null);
-  final ValueNotifier<Set<String>> _selectedCallTiles =
-      ValueNotifier<Set<String>>(<String>{});
+  final ValueNotifier<List<String>> _selectedCallTiles =
+      ValueNotifier<List<String>>(<String>[]);
 
   // ===== 回答コメントのソート・フィルタ状態 =====
   String _commentSortKey = '投稿順'; // or 'お気に入り数順'
@@ -74,111 +77,106 @@ class _DetailPageState extends State<DetailPage> {
   String _commentSelectedLeague = '未選択';
   String _commentSelectedRank = '未選択';
 
-  // ===== サブスク状態（簡易：ユーザーDocの isPremium/bool を参照。なければ false）=====
-  bool _isPremium = false;
-  Future<void> _loadPremiumFlag() async {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) {
-      if (mounted) setState(() => _isPremium = false);
-      return;
-    }
-    try {
-      final s = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(uid)
-          .get();
-      final m = s.data() ?? const {};
-      final v = (m['isPremium'] ?? false) as bool;
-      if (mounted) setState(() => _isPremium = v);
-    } catch (_) {
-      if (mounted) setState(() => _isPremium = false);
-    }
-  }
-
   // ===== 初期ローディング制御用（Firestore + 画像） =====
   bool _postLoaded = false; // posts/{postId} の取得が完了したら true
   bool _imageFinished = false; // 牌姿画像の表示まで完了したら true
   bool get _showInitialLoading => !_postLoaded || !_imageFinished;
 
-  // ===== 「みんなの回答を見る」→ 3投稿ごとにアップセル =====
+  // ===== 「みんなの回答を見る」→ 3投稿ごとにアップセル or 広告 =====
   static const _kViewedSetKey = 'detail_unique_posts_seen';
-  Future<void> _maybeUpsellEvery3UniquePosts() async {
-    if (_isPremium) return; // 課金済はスキップ
+
+  Future<void> _maybeUpsellEvery3UniquePosts(bool isPremium) async {
+    if (isPremium) return; // 課金済はスキップ
+
     final prefs = await SharedPreferences.getInstance();
     final list = prefs.getStringList(_kViewedSetKey) ?? <String>[];
+
     if (!list.contains(widget.postId)) {
       list.add(widget.postId);
       await prefs.setStringList(_kViewedSetKey, list);
+
+      // ★ 3投稿ごとに処理
       if (list.length % 3 == 0) {
-        if (!mounted) return;
-        await showModalBottomSheet<void>(
-          context: context,
-          backgroundColor: const Color(0xFF0B1114),
-          shape: const RoundedRectangleBorder(
-            borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-          ),
-          builder: (_) => Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(
-                  Icons.workspace_premium,
-                  color: Colors.cyanAccent,
-                  size: 28,
-                ),
-                const SizedBox(height: 10),
-                const Text(
-                  '広告の代わりにサブスクで快適に！',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                const Text(
-                  'サブスク登録すると回答入力・詳細操作が解放され、広告も非表示になります。',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.white70),
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: () => Navigator.pop(context),
-                        style: OutlinedButton.styleFrom(
-                          side: const BorderSide(color: Colors.cyanAccent),
-                          foregroundColor: Colors.cyanAccent,
-                        ),
-                        child: const Text('あとで'),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: ElevatedButton(
-                        onPressed: () {
-                          Navigator.pop(context);
-                          // 購入ページがある場合はここで遷移を実装してください
-                          // Navigator.of(context).pushNamed('/purchase');
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('マイページから購読設定が可能です')),
-                          );
-                        },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.cyanAccent,
-                          foregroundColor: Colors.black,
-                        ),
-                        child: const Text('サブスクを見る'),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
+        // ① まずインタースティシャル広告を試す
+        bool shown = false;
+        try {
+          shown = await InterstitialAdService.instance.showIfAvailable();
+        } catch (e) {
+          // サービス側で例外が出ても画面が落ちないようにしておく
+          debugPrint('InterstitialAdService error: $e');
+        }
+
+        // ② 広告が出せなかったときだけ従来どおりのサブスク誘導
+        if (!shown && mounted) {
+          await showModalBottomSheet<void>(
+            context: context,
+            backgroundColor: const Color(0xFF0B1114),
+            shape: const RoundedRectangleBorder(
+              borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
             ),
-          ),
-        );
+            builder: (_) => Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(
+                    Icons.workspace_premium,
+                    color: Colors.cyanAccent,
+                    size: 28,
+                  ),
+                  const SizedBox(height: 10),
+                  const Text(
+                    '広告の代わりにサブスクで快適に！',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'サブスク登録すると回答入力・詳細操作が解放され、広告も非表示になります。',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.white70),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.pop(context),
+                          style: OutlinedButton.styleFrom(
+                            side: const BorderSide(color: Colors.cyanAccent),
+                            foregroundColor: Colors.cyanAccent,
+                          ),
+                          child: const Text('あとで'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: () {
+                            Navigator.pop(context);
+                            // 購入ページがある場合はここで遷移を実装してください
+                            // Navigator.of(context).pushNamed('/purchase');
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('マイページから購読設定が可能です')),
+                            );
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.cyanAccent,
+                            foregroundColor: Colors.black,
+                          ),
+                          child: const Text('サブスクを見る'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
       }
     }
   }
@@ -200,34 +198,9 @@ class _DetailPageState extends State<DetailPage> {
     ).showSnackBar(const SnackBar(content: Text('表示設定をリセットしました')));
   }
 
-  // ★ HomePage / MyPage と同じテイストの「ページ全体ローディング」
-  Widget _buildFullPageLoading() {
-    return Container(
-      decoration: const BoxDecoration(
-        image: DecorationImage(
-          image: AssetImage('assets/images/background.png'),
-          fit: BoxFit.cover,
-        ),
-      ),
-      child: const Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            CircularProgressIndicator(
-              valueColor: AlwaysStoppedAnimation<Color>(Colors.cyanAccent),
-            ),
-            SizedBox(height: 16),
-            Text('Now Loading...', style: TextStyle(color: Colors.cyanAccent)),
-          ],
-        ),
-      ),
-    );
-  }
-
   @override
   void initState() {
     super.initState();
-    _loadPremiumFlag();
 
     // ★ ホーム側から navIds/navIndex が渡されていれば、それをそのまま使う
     if (widget.navIds != null && widget.navIds!.isNotEmpty) {
@@ -294,7 +267,10 @@ class _DetailPageState extends State<DetailPage> {
   }
 
   // 回答送信（課金ユーザーのみボタン表示。実装は従来どおり）
-  Future<void> _submitAnswer({required String postType}) async {
+  Future<void> _submitAnswer({
+    required String postType,
+    required bool isPremium,
+  }) async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) {
       if (!mounted) return;
@@ -303,7 +279,7 @@ class _DetailPageState extends State<DetailPage> {
       ).showSnackBar(const SnackBar(content: Text('回答を保存するにはログインが必要です')));
       return;
     }
-    if (!_isPremium) {
+    if (!isPremium) {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
@@ -369,7 +345,7 @@ class _DetailPageState extends State<DetailPage> {
 
     List<String> callTilesToSave = <String>[];
     if (postType == '副露判断' && _call.value == true) {
-      callTilesToSave = _selectedCallTiles.value.toList()..sort();
+      callTilesToSave = List<String>.from(_selectedCallTiles.value)..sort();
     }
     final baseData = <String, dynamic>{
       'tile': tile,
@@ -845,6 +821,10 @@ class _DetailPageState extends State<DetailPage> {
 
   @override
   Widget build(BuildContext context) {
+    final user = FirebaseAuth.instance.currentUser;
+    final premiumProvider = context.watch<PremiumProvider>();
+    final bool isPremium = premiumProvider.isPremium;
+
     // 見出し共通スタイル
     const headerStyle = TextStyle(
       color: Colors.white,
@@ -856,6 +836,10 @@ class _DetailPageState extends State<DetailPage> {
     return BaseScaffold(
       title: '問題の詳細',
       currentIndex: widget.currentIndex,
+      // ★ ここで BaseScaffold 側の共通ローディングオーバーレイを使う
+      showLoading: _showInitialLoading,
+      // loadingChild を渡さなければ BaseScaffold のデフォルト
+      // （background.png ＋ "Now Loading..."）が出ます
       body: Stack(
         children: [
           // ===== 本文 =====
@@ -1003,7 +987,7 @@ class _DetailPageState extends State<DetailPage> {
                       .cast<String>()
                       .toList();
 
-              final String? myUid = FirebaseAuth.instance.currentUser?.uid;
+              final String? myUid = user?.uid;
               final Stream<DocumentSnapshot<Map<String, dynamic>>>?
               myAnswerStream = myUid == null
                   ? null
@@ -1034,7 +1018,7 @@ class _DetailPageState extends State<DetailPage> {
                         .map((e) => e?.toString() ?? '')
                         .where((e) => e.isNotEmpty)
                         .cast<String>()
-                        .toSet();
+                        .toList();
 
                     if (_selectedTile.value == null && prevTile.isNotEmpty) {
                       _selectedTile.value = prevTile;
@@ -1143,7 +1127,7 @@ class _DetailPageState extends State<DetailPage> {
                             );
 
                             // 非課金は見せるだけ（タップ無効）
-                            return _isPremium
+                            return isPremium
                                 ? selector
                                 : AbsorbPointer(
                                     child: Opacity(
@@ -1338,10 +1322,11 @@ class _DetailPageState extends State<DetailPage> {
 
                         // タイプ選択（非課金はトグル非表示）
                         const SizedBox(height: 16),
-                        if (_isPremium)
+                        if (isPremium)
                           _AnswerTypeCard(
                             postType: postType,
-                            tiles: handForChoice,
+                            tiles: tiles, // ← どれを切る？と同じ並びを使う
+                            meldDisplayGroups: meldDisplayGroups,
                             reach: _reach,
                             call: _call,
                             selectedCallTiles: _selectedCallTiles,
@@ -1370,7 +1355,7 @@ class _DetailPageState extends State<DetailPage> {
                         const SizedBox(height: 24),
 
                         // コメント欄（課金のみ）
-                        if (_isPremium) ...[
+                        if (isPremium) ...[
                           TextField(
                             controller: commentController,
                             maxLength: 200,
@@ -1394,10 +1379,12 @@ class _DetailPageState extends State<DetailPage> {
 
                         // アクションボタン（課金: 回答する / 非課金: みんなの回答を見る）
                         Center(
-                          child: _isPremium
+                          child: isPremium
                               ? ElevatedButton.icon(
-                                  onPressed: () =>
-                                      _submitAnswer(postType: postType),
+                                  onPressed: () => _submitAnswer(
+                                    postType: postType,
+                                    isPremium: isPremium,
+                                  ),
                                   icon: const Icon(Icons.send),
                                   label: const Text('回答する'),
                                   style: ElevatedButton.styleFrom(
@@ -1414,7 +1401,9 @@ class _DetailPageState extends State<DetailPage> {
                               : ElevatedButton.icon(
                                   onPressed: () async {
                                     _showResults.value = true;
-                                    await _maybeUpsellEvery3UniquePosts();
+                                    await _maybeUpsellEvery3UniquePosts(
+                                      isPremium,
+                                    );
                                   },
                                   icon: const Icon(Icons.visibility),
                                   label: const Text('みんなの回答を見る'),
@@ -1685,296 +1674,632 @@ class _DetailPageState extends State<DetailPage> {
 
           // 右上固定 ☆ ボタン
           const Positioned(top: 4, right: 4, child: _FavButtonOverlay()),
-
-          // ★ Firestore or 画像がまだ終わっていない間は、
-          //   Home/MyPage と同じローディング画面をページ全体にかぶせる
-          if (_showInitialLoading)
-            Positioned.fill(child: _buildFullPageLoading()),
         ],
       ),
     );
   }
 }
 
-//// =============== 補助ウィジェット群（このファイル内に必ず置く） ===============
+// === 手牌から「副露で消費した牌」を取り除くユーティリティ ===
+List<String> _applyMeldRemovals(
+  List<String> baseTiles,
+  List<List<String>> meldRestoreGroups,
+) {
+  final hand = List<String>.from(baseTiles);
+  for (final group in meldRestoreGroups) {
+    for (final t in group) {
+      final idx = hand.indexOf(t);
+      if (idx >= 0) {
+        hand.removeAt(idx);
+      }
+    }
+  }
+  return hand;
+}
 
+// === どれを切る？右端の小さい副露表示 ===
+class _SmallMeldGroupsRow extends StatelessWidget {
+  final List<List<String>> groups;
+
+  const _SmallMeldGroupsRow({required this.groups});
+
+  static String _asset(String id) => 'assets/tiles/$id.png';
+
+  @override
+  Widget build(BuildContext context) {
+    // 副露がなければ何も描画しない
+    if (groups.isEmpty) return const SizedBox.shrink();
+
+    // HomePage の _TileStrip を参考にしたサイズ感
+    const double maxTileHeight = 28.0; // これ以上大きくならない
+    const double aspectWOverH = 2 / 3; // 牌画像の縦横比
+    const double gapRatio = 0.45; // グループ間の隙間（牌幅に対する割合）
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // 空グループは除外
+        final nonEmptyGroups = groups.where((g) => g.isNotEmpty).toList();
+        if (nonEmptyGroups.isEmpty) return const SizedBox.shrink();
+
+        // 牌枚数とグループ間の隙間の数
+        final int tileCount = nonEmptyGroups.fold(
+          0,
+          (sum, g) => sum + g.length,
+        );
+        final int gapCountBetweenGroups = nonEmptyGroups.length > 1
+            ? nonEmptyGroups.length - 1
+            : 0;
+
+        // 自然なサイズ（最大サイズでレイアウトした場合）
+        final double naturalTileWidth = maxTileHeight * aspectWOverH;
+        final double naturalGapWidth = naturalTileWidth * gapRatio;
+        final double naturalWidth =
+            tileCount * naturalTileWidth +
+            gapCountBetweenGroups * naturalGapWidth;
+
+        // 親の幅に収まるように必要なら縮小（大きくはしない）
+        final double maxW = constraints.maxWidth.isFinite
+            ? constraints.maxWidth
+            : naturalWidth;
+        double scale = 1.0;
+        if (naturalWidth > maxW && naturalWidth > 0) {
+          scale = maxW / naturalWidth;
+        }
+
+        final double tileWidth = naturalTileWidth * scale;
+        final double gapWidth = naturalGapWidth * scale;
+        final double height = maxTileHeight * scale;
+
+        List<Widget> children = [];
+        bool firstGroup = true;
+
+        for (final g in nonEmptyGroups) {
+          if (!firstGroup) {
+            // グループ間の小さな隙間
+            children.add(SizedBox(width: gapWidth));
+          }
+          firstGroup = false;
+
+          for (final id in g) {
+            children.add(
+              SizedBox(
+                width: tileWidth,
+                height: height,
+                child: AspectRatio(
+                  aspectRatio: aspectWOverH,
+                  child: Align(
+                    alignment: Alignment.bottomCenter,
+                    child: Image.asset(
+                      _asset(id),
+                      fit: BoxFit.contain,
+                      errorBuilder: (_, __, ___) => Center(
+                        child: Text(
+                          id,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 8,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            );
+          }
+        }
+
+        return SizedBox(
+          width: maxW,
+          height: height,
+          child: Align(
+            alignment: Alignment.bottomRight, // 右下に寄せて表示
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: children,
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+// === 「リーチ判断・副露判断」用のタイプ選択カード ===
 class _AnswerTypeCard extends StatelessWidget {
-  final String postType; // 'リーチ判断' / '副露判断'
-  final List<String> tiles;
+  final String postType;
+  final List<String> tiles; // 副露判断時の「鳴きに使う候補」
+  final List<List<String>> meldDisplayGroups;
   final ValueNotifier<bool?> reach;
   final ValueNotifier<bool?> call;
-  final ValueNotifier<Set<String>> selectedCallTiles;
-  final ValueNotifier<String?> selectedTile; // ★ スルー時に打牌選択もクリア
+  final ValueNotifier<List<String>> selectedCallTiles;
+  final ValueNotifier<String?> selectedTile;
   final Future<void> Function() onSound;
 
-  // ★追加：非課金は選択UIを出さない（見出しだけ表示）
-  final bool readonly;
-
   const _AnswerTypeCard({
-    super.key,
     required this.postType,
     required this.tiles,
+    required this.meldDisplayGroups,
     required this.reach,
     required this.call,
     required this.selectedCallTiles,
     required this.selectedTile,
     required this.onSound,
-    this.readonly = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    const headerStyle = TextStyle(
-      color: Colors.white,
-      fontSize: 20,
-      fontWeight: FontWeight.bold,
-      shadows: [Shadow(color: Colors.cyan, blurRadius: 6)],
-    );
-
-    if (postType != 'リーチ判断' && postType != '副露判断') {
+    if (postType == 'リーチ判断') {
+      return _buildReachCard(context);
+    } else if (postType == '副露判断') {
+      return _buildCallCard(context);
+    } else {
+      // 通常の「何切る」は追加 UI なし
       return const SizedBox.shrink();
     }
+  }
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(postType == 'リーチ判断' ? 'リーチする？' : '鳴く？', style: headerStyle),
-        const SizedBox(height: 8),
-
-        // ▼ 課金のみ：トグルと副露2枚選択を表示
-        if (postType == 'リーチ判断' && !readonly)
-          ValueListenableBuilder<bool?>(
-            valueListenable: reach,
-            builder: (context, v, _) => Row(
+  Widget _buildReachCard(BuildContext context) {
+    return ValueListenableBuilder<bool?>(
+      valueListenable: reach,
+      builder: (context, value, _) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'リーチしますか？',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
               children: [
-                Expanded(
-                  child: _ToggleButton(
-                    label: 'する',
-                    selected: v == true,
-                    onTap: () async {
-                      await onSound();
-                      reach.value = true;
-                    },
+                ChoiceChip(
+                  label: const Text('リーチする'),
+                  selected: value == true,
+                  selectedColor: Colors.cyanAccent,
+                  labelStyle: TextStyle(
+                    color: value == true ? Colors.black : Colors.white,
                   ),
+                  onSelected: (sel) async {
+                    await onSound();
+                    reach.value = sel ? true : null;
+                  },
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _ToggleButton(
-                    label: 'しない',
-                    selected: v == false,
-                    onTap: () async {
-                      await onSound();
-                      reach.value = false;
-                    },
+                ChoiceChip(
+                  label: const Text('リーチしない'),
+                  selected: value == false,
+                  selectedColor: Colors.deepOrangeAccent,
+                  labelStyle: TextStyle(
+                    color: value == false ? Colors.black : Colors.white,
                   ),
+                  onSelected: (sel) async {
+                    await onSound();
+                    reach.value = sel ? false : null;
+                  },
                 ),
               ],
             ),
-          ),
+            // ← 「※ リーチ判断では〜」の注意書きは削除
+          ],
+        );
+      },
+    );
+  }
 
-        if (postType == '副露判断' && !readonly) ...[
-          ValueListenableBuilder<bool?>(
-            valueListenable: call,
-            builder: (context, v, _) => Row(
+  Widget _buildCallCard(BuildContext context) {
+    return ValueListenableBuilder<bool?>(
+      valueListenable: call,
+      builder: (context, value, _) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              '鳴きますか？',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
               children: [
-                Expanded(
-                  child: _ToggleButton(
-                    label: '鳴く',
-                    selected: v == true,
-                    onTap: () async {
-                      await onSound();
-                      call.value = true;
-                    },
+                ChoiceChip(
+                  label: const Text('鳴く'),
+                  selected: value == true,
+                  selectedColor: Colors.cyanAccent,
+                  labelStyle: TextStyle(
+                    color: value == true ? Colors.black : Colors.white,
                   ),
+                  onSelected: (sel) async {
+                    await onSound();
+                    call.value = sel ? true : null;
+                    if (!sel) {
+                      selectedCallTiles.value = <String>[];
+                    }
+                  },
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _ToggleButton(
-                    label: 'スルー',
-                    selected: v == false,
-                    onTap: () async {
-                      await onSound();
-                      // ★ スルーを選択したら鳴き2枚と打牌選択を解除
-                      call.value = false;
-                      selectedCallTiles.value = <String>{};
-                      selectedTile.value = null;
-                    },
+                ChoiceChip(
+                  label: const Text('スルー'),
+                  selected: value == false,
+                  selectedColor: Colors.deepOrangeAccent,
+                  labelStyle: TextStyle(
+                    color: value == false ? Colors.black : Colors.white,
                   ),
+                  onSelected: (sel) async {
+                    await onSound();
+                    call.value = sel ? false : null;
+                    if (sel) {
+                      selectedCallTiles.value = <String>[];
+                    }
+                  },
                 ),
               ],
             ),
-          ),
-          const SizedBox(height: 8),
-          ValueListenableBuilder<bool?>(
-            valueListenable: call,
-            builder: (context, v, _) {
-              if (v != true) return const SizedBox.shrink();
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+            const SizedBox(height: 8),
+            if (value == true)
+              _CallTileSelector(
+                tiles: tiles, // ← ここもさっきの変更でどれを切る？と同じ配列
+                selectedCallTiles: selectedCallTiles,
+                onSound: onSound,
+                meldDisplayGroups: meldDisplayGroups,
+              )
+            else
+              const Text(
+                '※ 「鳴く」を選ぶと、副露に使う 2 枚を選択します',
+                style: TextStyle(color: Colors.white60, fontSize: 12),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+// === 副露に使う 2 枚を選択する UI ===
+class _CallTileSelector extends StatelessWidget {
+  final List<String> tiles;
+  final ValueNotifier<List<String>> selectedCallTiles;
+  final Future<void> Function() onSound;
+  final List<List<String>> meldDisplayGroups;
+
+  const _CallTileSelector({
+    required this.tiles,
+    required this.selectedCallTiles,
+    required this.onSound,
+    required this.meldDisplayGroups,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<List<String>>(
+      valueListenable: selectedCallTiles,
+      builder: (context, selectedList, _) {
+        // ▼ 現在の選択（List<String>）から、どのインデックスが選択されているかを復元する
+        final selectedIndices = <int>{};
+        final used = <int>{};
+
+        for (final tileId in selectedList) {
+          for (int i = 0; i < tiles.length; i++) {
+            if (used.contains(i)) continue;
+            if (tiles[i] == tileId) {
+              used.add(i);
+              selectedIndices.add(i);
+              break;
+            }
+          }
+        }
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              '副露に使う 2 枚を選んでください',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 13,
+                fontWeight: FontWeight.bold, // ★ 白の太字
+              ),
+            ),
+            const SizedBox(height: 6),
+
+            if (tiles.isEmpty)
+              const Text('選択肢の牌が未設定です', style: TextStyle(color: Colors.white70))
+            else
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  const Text(
-                    '鳴く2枚を選択（最大2枚）',
-                    style: TextStyle(color: Colors.white60, fontSize: 12),
-                  ),
-                  const SizedBox(height: 6),
-                  ValueListenableBuilder<Set<String>>(
-                    valueListenable: selectedCallTiles,
-                    builder: (context, selSet, __) => Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: tiles.map((tileId) {
-                        final isSelected = selSet.contains(tileId);
+                  // 左：手牌（どれを切る？と同じ等幅・下端揃え）
+                  Expanded(
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: List.generate(tiles.length, (index) {
+                        final tileId = tiles[index];
+                        final isSelected = selectedIndices.contains(index);
                         return Expanded(
                           child: GestureDetector(
                             onTap: () async {
                               await onSound();
-                              final next = Set<String>.from(selSet);
+
+                              final current = List<String>.from(
+                                selectedCallTiles.value,
+                              );
+                              final tile = tiles[index];
+
                               if (isSelected) {
-                                next.remove(tileId);
-                              } else {
-                                if (next.length >= 2) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(content: Text('選択は最大2枚です')),
-                                  );
-                                } else {
-                                  next.add(tileId);
+                                // すでに選択されている → 1 個だけ外す
+                                final removeIdx = current.indexOf(tile);
+                                if (removeIdx != -1) {
+                                  current.removeAt(removeIdx);
                                 }
+                              } else {
+                                // 新しく選択する（最大 2 枚）
+                                if (current.length >= 2) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text('副露牌は最大 2 枚まで選択できます'),
+                                    ),
+                                  );
+                                  return;
+                                }
+                                current.add(tile);
                               }
-                              selectedCallTiles.value = next;
+
+                              selectedCallTiles.value = current;
                             },
-                            child: Stack(
-                              children: [
-                                Container(
-                                  decoration: BoxDecoration(
-                                    border: Border(
-                                      bottom: BorderSide(
-                                        color: isSelected
-                                            ? Colors.cyanAccent
-                                            : Colors.transparent,
-                                        width: 3,
+                            child: Container(
+                              decoration: BoxDecoration(
+                                border: Border(
+                                  bottom: BorderSide(
+                                    color: isSelected
+                                        ? Colors.cyanAccent
+                                        : Colors.transparent,
+                                    width: 3,
+                                  ),
+                                ),
+                              ),
+                              child: AspectRatio(
+                                aspectRatio: 2 / 3,
+                                child: Align(
+                                  alignment: Alignment.bottomCenter,
+                                  child: Image.asset(
+                                    'assets/tiles/$tileId.png',
+                                    fit: BoxFit.contain,
+                                    errorBuilder: (_, __, ___) => Center(
+                                      child: Text(
+                                        tileId,
+                                        style: TextStyle(
+                                          color: isSelected
+                                              ? Colors.cyanAccent
+                                              : Colors.white,
+                                          fontWeight: FontWeight.bold,
+                                        ),
                                       ),
                                     ),
                                   ),
-                                  child: AspectRatio(
-                                    aspectRatio: 2 / 3,
-                                    child: Image.asset(
-                                      'assets/tiles/$tileId.png',
-                                      fit: BoxFit.contain,
-                                    ),
-                                  ),
                                 ),
-                                if (isSelected)
-                                  const Positioned(
-                                    right: 4,
-                                    top: 4,
-                                    child: Icon(
-                                      Icons.check_circle,
-                                      size: 18,
-                                      color: Colors.cyanAccent,
-                                    ),
-                                  ),
-                              ],
+                              ),
                             ),
                           ),
                         );
-                      }).toList(),
+                      }),
                     ),
                   ),
+
+                  // 右：既に副露している牌（どれを切る？と同じミニ表示）
+                  if (meldDisplayGroups.isNotEmpty) ...[
+                    const SizedBox(width: 8),
+                    _SmallMeldGroupsRow(groups: meldDisplayGroups),
+                  ],
                 ],
-              );
-            },
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+// === 投稿者の選択を表示するボックス ===
+class _AuthorOnlyTileBox extends StatelessWidget {
+  final String tile;
+  final String postType;
+  final bool? authorReach;
+  final bool? authorCall;
+  final List<String>? authorCallTiles;
+
+  const _AuthorOnlyTileBox({
+    required this.tile,
+    required this.postType,
+    required this.authorReach,
+    required this.authorCall,
+    required this.authorCallTiles,
+  });
+
+  // デフォルトは少し大きめ（通常何切る用）
+  Widget _buildTileImg(String id, {double height = 52}) {
+    if (id.isEmpty) {
+      return const Text('未設定', style: TextStyle(color: Colors.white54));
+    }
+    return SizedBox(
+      height: height,
+      child: Image.asset('assets/tiles/$id.png', fit: BoxFit.contain),
+    );
+  }
+
+  Widget _buildPill(String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: Colors.cyanAccent,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.bold,
+          color: Colors.black,
+          height: 1.2,
+        ),
+        softWrap: false,
+      ),
+    );
+  }
+
+  Widget _buildTitle() {
+    return const Text(
+      '投稿者の選択',
+      style: TextStyle(
+        color: Colors.white,
+        fontWeight: FontWeight.bold,
+        decoration: TextDecoration.underline,
+        decorationColor: Colors.cyanAccent,
+        decorationThickness: 2,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final callTiles =
+        authorCallTiles?.where((e) => e.trim().isNotEmpty).toList() ??
+        <String>[];
+
+    // ▼ リーチ判断：ピル → 打牌牌 を縦に並べる
+    if (postType == 'リーチ判断') {
+      final hasTile = tile.isNotEmpty;
+
+      if (authorReach == null && !hasTile) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: const [
+            // 未設定メッセージはそのまま左寄せ
+            Text('投稿者の選択は未設定です。', style: TextStyle(color: Colors.white54)),
+          ],
+        );
+      }
+
+      final decisionText = authorReach == true
+          ? 'リーチ: する'
+          : authorReach == false
+          ? 'リーチ: しない'
+          : 'リーチ有無未設定';
+
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          _buildTitle(),
+          const SizedBox(height: 8),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              _buildPill(decisionText),
+              if (hasTile) ...[const SizedBox(height: 6), _buildTileImg(tile)],
+            ],
           ),
         ],
+      );
+    }
+
+    // ▼ 副露判断：ピル → 副露 2 枚（小さめ）→ 打牌牌（やや大きめ）を縦に
+    if (postType == '副露判断') {
+      final hasTile = tile.isNotEmpty;
+      final hasPair = callTiles.isNotEmpty;
+
+      if (authorCall == null && !hasTile && !hasPair) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: const [
+            Text('投稿者の選択は未設定です。', style: TextStyle(color: Colors.white54)),
+          ],
+        );
+      }
+
+      final headText = authorCall == true
+          ? '鳴く'
+          : authorCall == false
+          ? 'スルー'
+          : '鳴き有無未設定';
+
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          _buildTitle(),
+          const SizedBox(height: 8),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              _buildPill(headText),
+              if (hasPair) ...[
+                const SizedBox(height: 4),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: callTiles.take(2).map((id) {
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 2),
+                      child: _buildTileImg(id, height: 26),
+                    );
+                  }).toList(),
+                ),
+              ],
+              if (hasTile) ...[const SizedBox(height: 6), _buildTileImg(tile)],
+            ],
+          ),
+        ],
+      );
+    }
+
+    // ▼ 通常の何切る（中央揃えに変更）
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.center, // ★ ここを center に変更
+      children: [
+        _buildTitle(),
+        const SizedBox(height: 8),
+        _buildTileImg(tile), // height 52 のまま（通常何切るは今まで通り）
       ],
     );
   }
 }
 
-/// 同一行で右側に小さく副露を並べる表示（暗カンの '0' は背面色で描画）
-class _SmallMeldGroupsRow extends StatelessWidget {
-  final List<List<String>> groups;
-  const _SmallMeldGroupsRow({super.key, required this.groups});
+// === 投稿者コメント表示ボックス ===
+class _AuthorOnlyCommentBox extends StatelessWidget {
+  final String comment;
 
-  // 牌画像パス
-  static String _asset(String id) => 'assets/tiles/$id.png';
+  const _AuthorOnlyCommentBox({required this.comment});
 
   @override
   Widget build(BuildContext context) {
-    // 小さめ
-    const double tileW = 18;
-    const double tileH = 27;
-
-    Widget tileView(String id) {
-      return SizedBox(
-        width: tileW,
-        height: tileH,
-        child: Align(
-          alignment: Alignment.bottomCenter,
-          child: Image.asset(
-            _asset(id),
-            fit: BoxFit.contain,
-            errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+    final hasComment = comment.trim().isNotEmpty;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          '投稿者コメント',
+          style: TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+            decoration: TextDecoration.underline,
+            decorationColor: Colors.cyanAccent,
+            decorationThickness: 2,
           ),
         ),
-      );
-    }
-
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: List.generate(groups.length, (gi) {
-          final g = groups[gi];
-          return Padding(
-            padding: EdgeInsets.only(right: gi == groups.length - 1 ? 0 : 6),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: g.map(tileView).toList(),
-            ),
-          );
-        }),
-      ),
-    );
-  }
-}
-
-class _ToggleButton extends StatelessWidget {
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  const _ToggleButton({
-    super.key,
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 120),
-      decoration: BoxDecoration(
-        color: selected ? Colors.cyanAccent : Colors.transparent,
-        border: Border.all(color: Colors.cyanAccent, width: 1.5),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 10),
-          child: Center(
-            child: Text(
-              label,
-              style: TextStyle(
-                color: selected ? Colors.black : Colors.white,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
+        const SizedBox(height: 8),
+        Text(
+          hasComment ? comment.trim() : '投稿者コメントは未設定です。',
+          style: const TextStyle(
+            color: Colors.white, // ← 透かさずホワイト
           ),
         ),
-      ),
+      ],
     );
   }
 }
@@ -2031,6 +2356,7 @@ class _StarCircle extends StatelessWidget {
 /// お気に入りボタン（users/{uid}.favoritePosts を Map で管理）
 class _FavButtonOverlay extends StatefulWidget {
   const _FavButtonOverlay({super.key});
+
   @override
   State<_FavButtonOverlay> createState() => _FavButtonOverlayState();
 }
@@ -2125,202 +2451,10 @@ class _FavButtonOverlayState extends State<_FavButtonOverlay> {
   }
 }
 
-/// 投稿者の「選択」
-class _AuthorOnlyTileBox extends StatelessWidget {
-  final String tile; // 打牌選択
-  final String postType;
-  final bool? authorReach; // リーチ判断用
-  final bool? authorCall; // 副露判断：鳴く/スルー
-  final List<String>? authorCallTiles; // 副露に使う牌（2枚想定）
-
-  const _AuthorOnlyTileBox({
-    super.key,
-    required this.tile,
-    required this.postType,
-    required this.authorReach,
-    this.authorCall,
-    this.authorCallTiles,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    const titleStyle = TextStyle(
-      color: Colors.white,
-      fontSize: 13,
-      fontWeight: FontWeight.bold,
-      decoration: TextDecoration.underline,
-      decorationColor: Colors.cyanAccent,
-      decorationThickness: 2,
-    );
-
-    // リーチ判断タグ
-    String? reachTag;
-    if (postType == 'リーチ判断' && authorReach != null) {
-      reachTag = authorReach! ? 'リーチ：する' : 'リーチ：しない';
-    }
-
-    // 副露判断タグ
-    String? callTag;
-    if (postType == '副露判断' && authorCall != null) {
-      callTag = authorCall! ? '鳴く' : 'スルー';
-    }
-
-    Widget pill(String text) => Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: Colors.cyanAccent.withOpacity(0.95),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Text(
-        text,
-        style: const TextStyle(
-          color: Colors.black,
-          fontSize: 11,
-          fontWeight: FontWeight.bold,
-          height: 1.2,
-        ),
-      ),
-    );
-
-    // --- 副露判断でスルーの時は「スルー」のみ表示 ---
-    if (postType == '副露判断' && authorCall == false) {
-      return Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Text('投稿者の選択', style: titleStyle, textAlign: TextAlign.center),
-          const SizedBox(height: 6),
-          pill('スルー'),
-        ],
-      );
-    }
-
-    // 縦並び UI（鳴く時やその他の場合）
-    Widget buildCallTilesRow(List<String> pair) {
-      final tiles = pair.where((e) => e.trim().isNotEmpty).toList();
-      if (tiles.isEmpty) return const SizedBox.shrink();
-      return Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          for (int i = 0; i < tiles.length && i < 2; i++) ...[
-            SizedBox(
-              width: 36,
-              height: 54,
-              child: Image.asset(
-                'assets/tiles/${tiles[i]}.png',
-                fit: BoxFit.contain,
-              ),
-            ),
-            if (i == 0 && tiles.length >= 2) const SizedBox(width: 6),
-          ],
-        ],
-      );
-    }
-
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        const Text('投稿者の選択', style: titleStyle, textAlign: TextAlign.center),
-        const SizedBox(height: 6),
-
-        // リーチ判断：上部にリーチピル
-        if (reachTag != null && postType == 'リーチ判断') ...[
-          pill(reachTag!),
-          const SizedBox(height: 8),
-        ],
-
-        // 副露判断（鳴く時）：鳴く → 副露に使う牌 → 打牌画像
-        if (postType == '副露判断' && authorCall == true) ...[
-          // 1) 鳴く
-          pill('鳴く'),
-          const SizedBox(height: 6),
-
-          // 2) 副露に使う牌（2枚）
-          if ((authorCallTiles ?? const []).isNotEmpty) ...[
-            buildCallTilesRow(authorCallTiles!),
-            const SizedBox(height: 6),
-          ],
-
-          // 3) 打牌
-          ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: 90, maxHeight: 120),
-            child: AspectRatio(
-              aspectRatio: 2 / 3,
-              child: Center(
-                child: tile.isNotEmpty
-                    ? Image.asset('assets/tiles/$tile.png', fit: BoxFit.contain)
-                    : const Icon(
-                        Icons.help_outline,
-                        color: Colors.white54,
-                        size: 28,
-                      ),
-              ),
-            ),
-          ),
-        ] else ...[
-          // 通常：打牌のみ
-          ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: 90, maxHeight: 120),
-            child: AspectRatio(
-              aspectRatio: 2 / 3,
-              child: Center(
-                child: tile.isNotEmpty
-                    ? Image.asset('assets/tiles/$tile.png', fit: BoxFit.contain)
-                    : const Icon(
-                        Icons.help_outline,
-                        color: Colors.white54,
-                        size: 28,
-                      ),
-              ),
-            ),
-          ),
-        ],
-      ],
-    );
-  }
-}
-
-/// 投稿者のコメント（中央寄せ・折り返し）
-class _AuthorOnlyCommentBox extends StatelessWidget {
-  final String comment;
-  const _AuthorOnlyCommentBox({super.key, required this.comment});
-
-  @override
-  Widget build(BuildContext context) {
-    const labelStyle = TextStyle(
-      color: Colors.white,
-      fontSize: 13,
-      fontWeight: FontWeight.bold,
-      decoration: TextDecoration.underline,
-      decorationColor: Colors.cyanAccent,
-      decorationThickness: 2,
-    );
-
-    final text = (comment.isNotEmpty) ? comment : '（コメントなし）';
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        const Text('投稿者のコメント', style: labelStyle, textAlign: TextAlign.center),
-        const SizedBox(height: 6),
-        Text(
-          text,
-          textAlign: TextAlign.center,
-          softWrap: true,
-          maxLines: 8,
-          overflow: TextOverflow.fade,
-          style: const TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.w700,
-            height: 1.35,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
 typedef OneDocBuilder =
     Widget Function(AsyncSnapshot<DocumentSnapshot<Map<String, dynamic>>>?);
 
+/// answers/{uid} の 1 ストリームだけを FutureBuilder 側から簡単に扱うためのヘルパー
 class _OneStreamBuilder extends StatelessWidget {
   final Stream<DocumentSnapshot<Map<String, dynamic>>>? myStream;
   final OneDocBuilder builder;
@@ -2333,168 +2467,22 @@ class _OneStreamBuilder extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (myStream == null) {
+      return builder(null);
+    }
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
       stream: myStream,
-      builder: (context, mySnap) => builder(mySnap),
+      builder: (context, snap) => builder(snap),
     );
   }
 }
-
-// ===============================================
-// 手牌から副露の消費分(restoreTilesの合計)を引いた配列を返す
-// ===============================================
-List<String> _applyMeldRemovals(List<String> src, List<List<String>> groups) {
-  if (groups.isEmpty) return List<String>.from(src);
-  final Map<String, int> need = {};
-  for (final g in groups) {
-    for (final id in g) {
-      if (id.isEmpty) continue;
-      need.update(id, (v) => v + 1, ifAbsent: () => 1);
-    }
-  }
-  final out = <String>[];
-  for (final id in src) {
-    final n = need[id];
-    if (n != null && n > 0) {
-      need[id] = n - 1; // 消費
-    } else {
-      out.add(id);
-    }
-  }
-  return out;
-}
-
-// =====================================================
-// 単一列の牌帯（使い所があれば利用）：左=手牌 / 右=副露
-// =====================================================
-class _SelectableTileStrip extends StatelessWidget {
-  final List<String> handTiles;
-  final List<List<String>> meldDisplayGroups;
-  final String? selected;
-  final ValueChanged<String> onSelect;
-
-  const _SelectableTileStrip({
-    super.key,
-    required this.handTiles,
-    required this.meldDisplayGroups,
-    required this.selected,
-    required this.onSelect,
-  });
-
-  static String _asset(String id) => 'assets/tiles/$id.png';
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, c) {
-        const gapUnit = 0.6;
-        const meldScale = 0.82;
-
-        final handCount = handTiles.length;
-        final meldTilesTotal = meldDisplayGroups.fold<int>(
-          0,
-          (s, g) => s + g.length,
-        );
-        final gapCount = meldDisplayGroups.isEmpty
-            ? 0
-            : meldDisplayGroups.length;
-
-        final totalUnits =
-            handCount * 1.0 + meldTilesTotal * meldScale + gapCount * gapUnit;
-
-        final baseW = c.maxWidth / (totalUnits == 0 ? 1 : totalUnits);
-        final handW = baseW * 1.0;
-        final meldW = baseW * meldScale;
-        final height = (handW * 3 / 2).clamp(28.0, 96.0);
-
-        Widget handTile(String id, bool isSel) => SizedBox(
-          width: handW,
-          child: AspectRatio(
-            aspectRatio: 2 / 3,
-            child: InkWell(
-              onTap: () => onSelect(id),
-              child: Container(
-                decoration: BoxDecoration(
-                  border: Border(
-                    bottom: BorderSide(
-                      color: isSel ? Colors.cyanAccent : Colors.transparent,
-                      width: 3,
-                    ),
-                  ),
-                ),
-                child: Align(
-                  alignment: Alignment.bottomCenter,
-                  child: Image.asset(
-                    _asset(id),
-                    fit: BoxFit.contain,
-                    errorBuilder: (_, __, ___) => Center(
-                      child: Text(
-                        id,
-                        style: TextStyle(
-                          color: isSel ? Colors.cyanAccent : Colors.white,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-
-        Widget meldTile(String id) => SizedBox(
-          width: meldW,
-          child: AspectRatio(
-            aspectRatio: 2 / 3,
-            child: Align(
-              alignment: Alignment.bottomCenter,
-              child: Image.asset(
-                _asset(id),
-                fit: BoxFit.contain,
-                errorBuilder: (_, __, ___) => Center(
-                  child: Text(id, style: const TextStyle(color: Colors.white)),
-                ),
-              ),
-            ),
-          ),
-        );
-
-        Widget gapBox() => SizedBox(width: baseW * gapUnit);
-
-        final children = <Widget>[];
-
-        for (final id in handTiles) {
-          children.add(handTile(id, selected == id));
-        }
-        for (int gi = 0; gi < meldDisplayGroups.length; gi++) {
-          children.add(gapBox());
-          for (final id in meldDisplayGroups[gi]) {
-            children.add(meldTile(id));
-          }
-        }
-
-        return SizedBox(
-          width: c.maxWidth,
-          height: height,
-          child: Align(
-            alignment: Alignment.bottomLeft,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: children,
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
 //// ================== 円グラフ ==================
 
 class _SliceEntry {
   final String label; // 例: 'する・5m' / '鳴く・[3m+3m]・5p' / 'スルー・[-]・(未選択)' / 'その他'
   final int value;
   final String? tileId; // 画像に使う牌ID。その他は null
+
   _SliceEntry(this.label, this.value, this.tileId);
 }
 
@@ -2615,8 +2603,9 @@ class _CombinedAnswersPie extends StatelessWidget {
             authorAnswerTile.isNotEmpty ? authorAnswerTile : null,
           );
         } else if (postType != 'リーチ判断' && postType != '副露判断') {
-          if (authorAnswerTile.isNotEmpty)
+          if (authorAnswerTile.isNotEmpty) {
             addLabel(authorAnswerTile, authorAnswerTile);
+          }
         }
 
         if (counts.isEmpty) {
@@ -2656,6 +2645,7 @@ class _PieWithIcons extends StatefulWidget {
   final List<_SliceEntry> slices;
   final double size;
   final String postType;
+
   const _PieWithIcons({
     super.key,
     required this.slices,
@@ -2745,8 +2735,9 @@ class _PieWithIconsState extends State<_PieWithIcons> {
         box == null ||
         parent == null ||
         !box.attached ||
-        !parent.attached)
+        !parent.attached) {
       return null;
+    }
     final g = box.localToGlobal(box.size.center(Offset.zero));
     return parent.globalToLocal(g);
   }
@@ -2982,80 +2973,6 @@ class _PieWithIconsState extends State<_PieWithIcons> {
     final pillBL = sBL != null ? _tagFromSliceLabel(sBL.label) : null;
     final pillTL = sTL != null ? _tagFromSliceLabel(sTL.label) : null;
 
-    // まずベース（円）を描く
-    final base = SizedBox(
-      width: size,
-      height: size,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          // 円グラフ（最背面）
-          Positioned.fill(
-            left: safePad,
-            right: safePad,
-            top: safePad,
-            bottom: safePad,
-            child: CustomPaint(painter: _PiePainter(paintEntries, colors)),
-          ),
-          // ％
-          ...percentWidgets,
-          // 四隅（最前面）
-          if (sTR != null)
-            Align(
-              alignment: Alignment.topRight,
-              child: Padding(
-                padding: EdgeInsets.all(m.pad),
-                child: _cornerColumn(
-                  slice: sTR,
-                  pill: pillTR,
-                  imgKey: _imgKeyTR,
-                  pillKey: _pillKeyTR,
-                ),
-              ),
-            ),
-          if (sBR != null)
-            Align(
-              alignment: Alignment.bottomRight,
-              child: Padding(
-                padding: EdgeInsets.all(m.pad),
-                child: _cornerColumn(
-                  slice: sBR,
-                  pill: pillBR,
-                  imgKey: _imgKeyBR,
-                  pillKey: _pillKeyBR,
-                ),
-              ),
-            ),
-          if (sBL != null)
-            Align(
-              alignment: Alignment.bottomLeft,
-              child: Padding(
-                padding: EdgeInsets.all(m.pad),
-                child: _cornerColumn(
-                  slice: sBL,
-                  pill: pillBL,
-                  imgKey: _imgKeyBL,
-                  pillKey: _pillKeyBL,
-                ),
-              ),
-            ),
-          if (sTL != null)
-            Align(
-              alignment: Alignment.topLeft,
-              child: Padding(
-                padding: EdgeInsets.all(m.pad),
-                child: _cornerColumn(
-                  slice: sTL,
-                  pill: pillTL,
-                  imgKey: _imgKeyTL,
-                  pillKey: _pillKeyTL,
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-
     // 打牌画像中心 or 「スルー」ピル中心
     Offset? fromTR = _centerOf(_imgKeyTR);
     Offset? fromBR = _centerOf(_imgKeyBR);
@@ -3109,14 +3026,18 @@ class _PieWithIconsState extends State<_PieWithIcons> {
 
     // リーダー線（起点→％文字）
     final leaderLines = <({Offset from, Offset to})>[];
-    if (sTR != null && fromTR != null && to0 != null)
+    if (sTR != null && fromTR != null && to0 != null) {
       leaderLines.add((from: fromTR, to: to0));
-    if (sBR != null && fromBR != null && to1 != null)
+    }
+    if (sBR != null && fromBR != null && to1 != null) {
       leaderLines.add((from: fromBR, to: to1));
-    if (sBL != null && fromBL != null && to2 != null)
+    }
+    if (sBL != null && fromBL != null && to2 != null) {
       leaderLines.add((from: fromBL, to: to2));
-    if (sTL != null && fromTL != null && toEtc != null)
+    }
+    if (sTL != null && fromTL != null && toEtc != null) {
       leaderLines.add((from: fromTL, to: toEtc));
+    }
 
     // ==== レイヤー順序 ====
     // [最背面] 円グラフ → リーダー線 → ％文字 → 四隅 [最前面]
@@ -3212,6 +3133,7 @@ class _PieWithIconsState extends State<_PieWithIcons> {
 class _PiePainter extends CustomPainter {
   final List<MapEntry<String, int>> data;
   final List<Color> colors;
+
   _PiePainter(this.data, this.colors);
 
   static Color _fallbackColor(int i) {

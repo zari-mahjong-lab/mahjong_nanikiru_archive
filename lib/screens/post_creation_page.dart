@@ -3,11 +3,13 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:audioplayers/audioplayers.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:provider/provider.dart';
 
+import '../providers/premium_provider.dart';
 import '../services/api_client.dart';
 import '../services/purchase_service.dart';
 import '../widgets/base_scaffold.dart';
@@ -63,7 +65,7 @@ class _PostCreationPageState extends State<PostCreationPage> {
   void initState() {
     super.initState();
     // 購入ストリーム購読の初期化（複数回呼んでも安全）
-    unawaited(PurchaseService.I.init());
+    PurchaseService.I.init();
   }
 
   @override
@@ -176,36 +178,6 @@ class _PostCreationPageState extends State<PostCreationPage> {
     );
   }
 
-  // ====== プレミアム切替（デバッグ用：エミュでの動作確認） ======
-  Future<void> _setPremiumDebug(bool v, String uid) async {
-    try {
-      unawaited(_playSE());
-      final doc = FirebaseFirestore.instance.collection('users').doc(uid);
-      if (v) {
-        await doc.set({
-          'isPremium': true,
-          'premiumActivatedAt': FieldValue.serverTimestamp(),
-          'premiumDebug': true,
-        }, SetOptions(merge: true));
-      } else {
-        await doc.set({
-          'isPremium': false,
-          'premiumDebug': true,
-        }, SetOptions(merge: true));
-        await doc.update({'premiumActivatedAt': FieldValue.delete()});
-      }
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(v ? 'プレミアムを有効化（テスト）' : 'プレミアムを無効化（テスト）')),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('更新に失敗しました: $e')));
-    }
-  }
-
   // ====== ストア購入/復元 ======
   Future<void> _buyPremium() async {
     if (_billingBusy) return;
@@ -248,6 +220,7 @@ class _PostCreationPageState extends State<PostCreationPage> {
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
+    final premiumProvider = context.watch<PremiumProvider>();
 
     // 未ログイン：ログイン誘導
     if (user == null) {
@@ -265,166 +238,121 @@ class _PostCreationPageState extends State<PostCreationPage> {
       );
     }
 
-    final uid = user.uid;
-    final userDocStream = FirebaseFirestore.instance
-        .collection('users')
-        .doc(uid)
-        .snapshots();
+    final isPremium = premiumProvider.isPremium;
 
-    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: userDocStream,
-      builder: (context, snap) {
-        // ★ 追加: users/{uid} がまだ届いていない間はローディング画面
-        if (snap.connectionState == ConnectionState.waiting && !snap.hasData) {
-          return BaseScaffold(
-            title: '投稿作成',
-            currentIndex: 1,
-            body: _buildFullPageLoading(),
-          );
-        }
-
-        // （お好みで）エラー時も拾っておくと親切
-        if (snap.hasError) {
-          return BaseScaffold(
-            title: '投稿作成',
-            currentIndex: 1,
-            body: Center(
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Text(
-                  'ユーザー情報の取得に失敗しました: ${snap.error}',
-                  style: const TextStyle(color: Colors.redAccent),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            ),
-          );
-        }
-
-        final isPremium = (snap.data?.data()?['isPremium'] as bool?) ?? false;
-
-        // ====== 非課金：ペイウォールを表示 ======
-        if (!isPremium) {
-          return BaseScaffold(
-            title: '投稿作成',
-            currentIndex: 1,
-            body: SingleChildScrollView(
-              padding: const EdgeInsets.all(24),
-              child: Center(
-                child: _Paywall(
-                  busy: _billingBusy,
-                  priceText: PurchaseService.I.formattedPrice(),
-                  onBuy: _buyPremium,
-                  onRestore: _restore,
-                  onDebugOn: () => _setPremiumDebug(true, uid),
-                  onDebugOff: () => _setPremiumDebug(false, uid),
-                ),
-              ),
-            ),
-          );
-        }
-
-        // ====== プレミアム：本来の投稿作成画面 ======
-        final contentPadding = const EdgeInsets.all(24.0);
-        return BaseScaffold(
-          title: '投稿作成',
-          currentIndex: 1,
-          body: SafeArea(
-            child: Stack(
-              children: [
-                IgnorePointer(
-                  ignoring: _loading,
-                  child: SingleChildScrollView(
-                    padding: contentPadding,
-                    child: Align(
-                      alignment: Alignment.topCenter,
-                      child: Container(
-                        padding: const EdgeInsets.all(20),
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            colors: [
-                              Colors.cyan.withValues(alpha: 0.10),
-                              // ignore: deprecated_member_use_from_same_package
-                              Colors.black.withValues(alpha: 0.50),
-                            ],
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                          ),
-                          border: Border.all(
-                            color: Colors.cyanAccent,
-                            width: 1.5,
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.cyanAccent.withValues(alpha: 0.50),
-                              blurRadius: 16,
-                              spreadRadius: 2,
-                              offset: const Offset(3, 6),
-                            ),
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.60),
-                              blurRadius: 6,
-                              offset: const Offset(-3, -3),
-                            ),
-                          ],
-                        ),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            selectedImage != null
-                                ? Image.file(selectedImage!)
-                                : const Text(
-                                    '画像が未選択です',
-                                    style: TextStyle(
-                                      color: Colors.white70,
-                                      fontSize: 16,
-                                      shadows: [
-                                        Shadow(
-                                          color: Colors.cyan,
-                                          blurRadius: 4,
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                            const SizedBox(height: 24),
-                            ElevatedButton.icon(
-                              onPressed: _showPickSheet,
-                              icon: const Icon(Icons.image),
-                              label: const Text('画像を選択'),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.cyanAccent,
-                                foregroundColor: Colors.black,
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            ElevatedButton.icon(
-                              onPressed: (selectedImage == null || _loading)
-                                  ? null
-                                  : _goToEditPage,
-                              icon: const Icon(Icons.edit),
-                              label: const Text('編集へ'),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.cyanAccent,
-                                foregroundColor: Colors.black,
-                              ),
-                            ),
-                            // ★ サーバー疎通テストボタンは削除済み
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                if (_loading)
-                  // ★ 背景画像付きサイバーローディングで全面オーバーレイ
-                  Positioned.fill(
-                    child: _buildFullPageLoading(message: '画像を解析中...'),
-                  ),
-              ],
+    // ====== 非課金：ペイウォールを表示 ======
+    if (!isPremium) {
+      return BaseScaffold(
+        title: '投稿作成',
+        currentIndex: 1,
+        body: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: Center(
+            child: _Paywall(
+              busy: _billingBusy,
+              priceText: PurchaseService.I.formattedPrice(),
+              onBuy: _buyPremium,
+              onRestore: _restore,
+              // デバッグビルドのときだけ強制ON/OFFを有効化
+              onDebugOn:
+                  kDebugMode ? () => premiumProvider.setDebugPremium(true) : null,
+              onDebugOff:
+                  kDebugMode ? () => premiumProvider.setDebugPremium(false) : null,
             ),
           ),
-        );
-      },
+        ),
+      );
+    }
+
+    // ====== プレミアム：本来の投稿作成画面 ======
+    final contentPadding = const EdgeInsets.all(24.0);
+    return BaseScaffold(
+      title: '投稿作成',
+      currentIndex: 1,
+      // ★ ここで画面全体ローディングを BaseScaffold に任せる
+      showLoading: _loading,
+      loadingChild: _buildFullPageLoading(message: '画像を解析中...'),
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: contentPadding,
+          child: Align(
+            alignment: Alignment.topCenter,
+            child: Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [
+                    Colors.cyan.withValues(alpha: 0.10),
+                    // ignore: deprecated_member_use_from_same_package
+                    Colors.black.withValues(alpha: 0.50),
+                  ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                border: Border.all(
+                  color: Colors.cyanAccent,
+                  width: 1.5,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.cyanAccent.withValues(alpha: 0.50),
+                    blurRadius: 16,
+                    spreadRadius: 2,
+                    offset: const Offset(3, 6),
+                  ),
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.60),
+                    blurRadius: 6,
+                    offset: const Offset(-3, -3),
+                  ),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  selectedImage != null
+                      ? Image.file(selectedImage!)
+                      : const Text(
+                          '画像が未選択です',
+                          style: TextStyle(
+                            color: Colors.white70,
+                            fontSize: 16,
+                            shadows: [
+                              Shadow(
+                                color: Colors.cyan,
+                                blurRadius: 4,
+                              ),
+                            ],
+                          ),
+                        ),
+                  const SizedBox(height: 24),
+                  ElevatedButton.icon(
+                    onPressed: _showPickSheet,
+                    icon: const Icon(Icons.image),
+                    label: const Text('画像を選択'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.cyanAccent,
+                      foregroundColor: Colors.black,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  ElevatedButton.icon(
+                    onPressed: (selectedImage == null || _loading)
+                        ? null
+                        : _goToEditPage,
+                    icon: const Icon(Icons.edit),
+                    label: const Text('編集へ'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.cyanAccent,
+                      foregroundColor: Colors.black,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -450,12 +378,12 @@ class _LoginCallout extends StatelessWidget {
           const Icon(Icons.lock_outline, color: Colors.cyanAccent, size: 40),
           const SizedBox(height: 12),
           const Text(
-            '投稿作成はログインが必要です',
+            '投稿作成はログインとプレミアム登録が必要です',
             style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 8),
           const Text(
-            'ログインすると、画像解析から「何切る」を作成できます。',
+            'ログインとプレミアム登録をすると、画像解析から何切る問題の手牌を作成し、投稿できるようになります。',
             style: TextStyle(color: Colors.white70),
           ),
           const SizedBox(height: 16),
@@ -479,21 +407,24 @@ class _Paywall extends StatelessWidget {
   final String? priceText;
   final VoidCallback onBuy;
   final VoidCallback onRestore;
-  final VoidCallback onDebugOn;
-  final VoidCallback onDebugOff;
+  // デバッグ用（null の場合は表示しない）
+  final VoidCallback? onDebugOn;
+  final VoidCallback? onDebugOff;
 
   const _Paywall({
     required this.busy,
     required this.priceText,
     required this.onBuy,
     required this.onRestore,
-    required this.onDebugOn,
-    required this.onDebugOff,
+    this.onDebugOn,
+    this.onDebugOff,
   });
 
   @override
   Widget build(BuildContext context) {
     final priceLabel = priceText ?? '¥---/月';
+    final showDebug = onDebugOn != null && onDebugOff != null;
+
     return Container(
       constraints: const BoxConstraints(maxWidth: 640),
       padding: const EdgeInsets.all(20),
@@ -529,8 +460,8 @@ class _Paywall extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           const Text(
-            '・画像から牌を自動解析して「何切る」を作成\n'
-            '・（将来）投稿の高度な分析/統計、限定機能 など',
+            '・画像から牌を自動解析して何切る問題の手牌を作成（手動で修正も可能）\n'
+            '・何切る問題の補足情報、投稿者の選択とコメントの記載も可能',
             style: TextStyle(color: Colors.white70),
           ),
           const SizedBox(height: 16),
@@ -571,50 +502,50 @@ class _Paywall extends StatelessWidget {
               ),
             ),
 
-          const Divider(height: 24, color: Colors.cyanAccent),
-
-          // デバッグ切替（エミュ/テスト用）
-          const Text(
-            'デバッグ（開発/エミュ用）',
-            style: TextStyle(
-              color: Colors.white70,
-              fontWeight: FontWeight.bold,
+          if (showDebug) ...[
+            const Divider(height: 24, color: Colors.cyanAccent),
+            const Text(
+              'デバッグ（開発/エミュ用）',
+              style: TextStyle(
+                color: Colors.white70,
+                fontWeight: FontWeight.bold,
+              ),
             ),
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 12,
-            runSpacing: 8,
-            children: [
-              OutlinedButton.icon(
-                onPressed: busy ? null : onDebugOn,
-                icon: const Icon(Icons.bolt, color: Colors.greenAccent),
-                label: const Text(
-                  'プレミアム有効化（テスト）',
-                  style: TextStyle(color: Colors.greenAccent),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 12,
+              runSpacing: 8,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: busy ? null : onDebugOn,
+                  icon: const Icon(Icons.bolt, color: Colors.greenAccent),
+                  label: const Text(
+                    'プレミアム有効化（テスト）',
+                    style: TextStyle(color: Colors.greenAccent),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Colors.greenAccent),
+                  ),
                 ),
-                style: OutlinedButton.styleFrom(
-                  side: const BorderSide(color: Colors.greenAccent),
+                OutlinedButton.icon(
+                  onPressed: busy ? null : onDebugOff,
+                  icon: const Icon(Icons.block, color: Colors.redAccent),
+                  label: const Text(
+                    'プレミアム無効化（テスト）',
+                    style: TextStyle(color: Colors.redAccent),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Colors.redAccent),
+                  ),
                 ),
-              ),
-              OutlinedButton.icon(
-                onPressed: busy ? null : onDebugOff,
-                icon: const Icon(Icons.block, color: Colors.redAccent),
-                label: const Text(
-                  'プレミアム無効化（テスト）',
-                  style: TextStyle(color: Colors.redAccent),
-                ),
-                style: OutlinedButton.styleFrom(
-                  side: const BorderSide(color: Colors.redAccent),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          const Text(
-            '※ ストア接続できないエミュレータでも、上記テストボタンで挙動確認できます。',
-            style: TextStyle(color: Colors.white54, fontSize: 12),
-          ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              '※ ストア接続できないエミュレータでも、上記テストボタンで挙動確認できます。',
+              style: TextStyle(color: Colors.white54, fontSize: 12),
+            ),
+          ],
         ],
       ),
     );
