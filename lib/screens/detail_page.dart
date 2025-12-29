@@ -12,6 +12,14 @@ import '../providers/premium_provider.dart';
 import '../widgets/base_scaffold.dart';
 import '../services/interstitial_ad_service.dart'; // ★ 追加
 
+// ===== 共通見出しスタイル（「どれを切る？」「回答集計結果」と同じ） =====
+const TextStyle kSectionHeaderStyle = TextStyle(
+  color: Colors.white,
+  fontSize: 20,
+  fontWeight: FontWeight.bold,
+  shadows: [Shadow(color: Colors.cyan, blurRadius: 6)],
+);
+
 // ===== Mini profile (トップレベル) =====
 class _MiniProfile {
   final String? nickname;
@@ -59,7 +67,7 @@ class DetailPage extends StatefulWidget {
 
 class _DetailPageState extends State<DetailPage> {
   // === 既存 ===
-  final ValueNotifier<String?> _selectedTile = ValueNotifier<String?>(null);
+  final ValueNotifier<int?> _selectedTileIndex = ValueNotifier<int?>(null);
   final ValueNotifier<bool> _showResults = ValueNotifier<bool>(false);
   final TextEditingController commentController = TextEditingController();
   final AudioPlayer _player = AudioPlayer();
@@ -67,8 +75,8 @@ class _DetailPageState extends State<DetailPage> {
   // タイプ別回答UI用
   final ValueNotifier<bool?> _reach = ValueNotifier<bool?>(null);
   final ValueNotifier<bool?> _call = ValueNotifier<bool?>(null);
-  final ValueNotifier<List<String>> _selectedCallTiles =
-      ValueNotifier<List<String>>(<String>[]);
+  final ValueNotifier<List<int>> _selectedCallTileIndices =
+      ValueNotifier<List<int>>(<int>[]);
 
   // ===== 回答コメントのソート・フィルタ状態 =====
   String _commentSortKey = '投稿順'; // or 'お気に入り数順'
@@ -80,6 +88,9 @@ class _DetailPageState extends State<DetailPage> {
   // ===== 初期ローディング制御用（Firestore + 画像） =====
   bool _postLoaded = false; // posts/{postId} の取得が完了したら true
   bool _imageFinished = false; // 牌姿画像の表示まで完了したら true
+
+  // Firestore の読み込み完了 ＋ 画像エリア（スピナー含む）の表示が始まるまで
+  // BaseScaffold の全面ローディングを出しておく
   bool get _showInitialLoading => !_postLoaded || !_imageFinished;
 
   // ===== 「みんなの回答を見る」→ 3投稿ごとにアップセル or 広告 =====
@@ -216,13 +227,13 @@ class _DetailPageState extends State<DetailPage> {
 
   @override
   void dispose() {
-    _selectedTile.dispose();
+    _selectedTileIndex.dispose();
+    _selectedCallTileIndices.dispose();
     _showResults.dispose();
     commentController.dispose();
     _player.dispose();
     _reach.dispose();
     _call.dispose();
-    _selectedCallTiles.dispose();
     super.dispose();
   }
 
@@ -270,6 +281,7 @@ class _DetailPageState extends State<DetailPage> {
   Future<void> _submitAnswer({
     required String postType,
     required bool isPremium,
+    required List<String> handTiles, // ✅ 追加（index→牌IDに変換するため）
   }) async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) {
@@ -287,19 +299,16 @@ class _DetailPageState extends State<DetailPage> {
       return;
     }
 
-    // --- バリデーション ---
-    final bool requireTile = postType != '副露判断';
-    final tile = _selectedTile.value ?? '';
+    // ---- 現在の選択状態（index） ----
+    final int? selIdx = _selectedTileIndex.value;
+    final bool? call = (postType == '副露判断') ? _call.value : null;
+    final bool? reach = (postType == 'リーチ判断') ? _reach.value : null;
 
-    if (requireTile && tile.isEmpty) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('牌を選択してください')));
-      return;
-    }
+    // ✅ 副露に使う2枚(index)
+    final callIdx = List<int>.from(_selectedCallTileIndices.value)..sort();
 
-    if (postType == 'リーチ判断' && _reach.value == null) {
+    // ---- バリデーション ----
+    if (postType == 'リーチ判断' && reach == null) {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
@@ -308,34 +317,93 @@ class _DetailPageState extends State<DetailPage> {
     }
 
     if (postType == '副露判断') {
-      if (_call.value == null) {
+      if (call == null) {
         if (!mounted) return;
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(const SnackBar(content: Text('鳴く／スルーを選択してください')));
         return;
       }
-      if (_call.value == true) {
-        if (_selectedCallTiles.value.length != 2) {
+
+      if (call == true) {
+        if (callIdx.length != 2) {
           if (!mounted) return;
           ScaffoldMessenger.of(
             context,
           ).showSnackBar(const SnackBar(content: Text('鳴く場合は副露に使う2枚を選んでください')));
           return;
         }
-        if (tile.isEmpty) {
+        if (selIdx == null) {
           if (!mounted) return;
           ScaffoldMessenger.of(
             context,
           ).showSnackBar(const SnackBar(content: Text('鳴く場合は打牌も選んでください')));
           return;
         }
+        if (callIdx.contains(selIdx)) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('副露に使う牌は打牌に選択できません')));
+          return;
+        }
+      } else {
+        // ✅ スルーなら打牌は保存しない（反映しない）
+        _selectedTileIndex.value = null;
+      }
+    } else {
+      // 通常/リーチ判断は打牌必須
+      if (selIdx == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('牌を選択してください')));
+        return;
       }
     }
 
     await _playSE();
 
-    final answersRef = FirebaseFirestore.instance
+    // ---- 保存する値（tile / callTiles のみ） ----
+    String tileToSave = '';
+    List<String> callTilesToSave = <String>[];
+
+    if (postType == '副露判断') {
+      if (call == true) {
+        tileToSave =
+            (selIdx != null && selIdx >= 0 && selIdx < handTiles.length)
+            ? handTiles[selIdx]
+            : '';
+
+        callTilesToSave = callIdx
+            .where((i) => i >= 0 && i < handTiles.length)
+            .map((i) => handTiles[i])
+            .toList();
+
+        callTilesToSave.sort(); // 互換のため
+      } else {
+        // スルー：打牌も副露2枚も保存しない
+        tileToSave = '';
+        callTilesToSave = <String>[];
+      }
+    } else {
+      // 通常 / リーチ判断
+      tileToSave = (selIdx != null && selIdx >= 0 && selIdx < handTiles.length)
+          ? handTiles[selIdx]
+          : '';
+    }
+
+    final baseData = <String, dynamic>{
+      'tile': tileToSave,
+      'comment': commentController.text.trim(),
+      'userId': uid,
+      'reach': postType == 'リーチ判断' ? reach : null,
+      'call': postType == '副露判断' ? call : null,
+      'callTiles': postType == '副露判断' ? callTilesToSave : <String>[],
+    };
+
+    final DocumentReference<Map<String, dynamic>> answersRef = FirebaseFirestore
+        .instance
         .collection('posts')
         .doc(widget.postId)
         .collection('answers')
@@ -343,24 +411,12 @@ class _DetailPageState extends State<DetailPage> {
 
     final now = FieldValue.serverTimestamp();
 
-    List<String> callTilesToSave = <String>[];
-    if (postType == '副露判断' && _call.value == true) {
-      callTilesToSave = List<String>.from(_selectedCallTiles.value)..sort();
-    }
-    final baseData = <String, dynamic>{
-      'tile': tile,
-      'comment': commentController.text.trim(),
-      'userId': uid,
-      'reach': postType == 'リーチ判断' ? _reach.value : null,
-      'call': postType == '副露判断' ? _call.value : null,
-      'callTiles': postType == '副露判断' ? callTilesToSave : <String>[],
-    };
-
     await FirebaseFirestore.instance.runTransaction((tx) async {
       final snap = await tx.get(answersRef);
+      final prev = snap.data(); // Map<String, dynamic>?
 
       if (snap.exists) {
-        final createdAt = snap.data()?['createdAt'];
+        final createdAt = prev?['createdAt'] ?? now; // 念のため null 対策
         tx.set(answersRef, {
           ...baseData,
           'createdAt': createdAt,
@@ -382,13 +438,14 @@ class _DetailPageState extends State<DetailPage> {
     ).showSnackBar(const SnackBar(content: Text('回答しました')));
   }
 
-  // 画像のポップアップ（ページ遷移しない）
+  // 画像のポップアップ（ページ遷移しない）★ここを差し替え
   Future<void> _openImagePopup(String url) async {
     await showGeneralDialog(
       context: context,
       barrierDismissible: true,
       barrierLabel: '閉じる',
-      barrierColor: Colors.black87,
+      // ★ 背景を真っ黒ではなく、後ろが見えるように透過させる
+      barrierColor: Colors.black.withOpacity(0.60),
       transitionDuration: const Duration(milliseconds: 180),
       pageBuilder: (context, anim, secondary) {
         final size = MediaQuery.of(context).size;
@@ -400,23 +457,32 @@ class _DetailPageState extends State<DetailPage> {
               child: Stack(
                 children: [
                   Container(
-                    color: Colors.black,
+                    // ★ 中のパネル自体も少し透けさせる（完全な真っ黒ではない）
                     constraints: BoxConstraints(
-                      maxWidth: size.width * 0.95,
-                      maxHeight: size.height * 0.85,
+                      maxWidth: size.width,
+                      maxHeight: size.height,
                     ),
-                    child: InteractiveViewer(
-                      maxScale: 5,
-                      child: Image.network(
-                        url,
-                        fit: BoxFit.contain,
-                        gaplessPlayback: true,
+                    // ★ ここでクリップしつつ、内部は自由に拡大・移動できるようにする
+                    child: ClipRect(
+                      child: InteractiveViewer(
+                        minScale: 1.0,
+                        maxScale: 5.0,
+                        // ★ 拡大したぶんも全体を見られるように、パンの許容量を広げる
+                        boundaryMargin: const EdgeInsets.all(double.infinity),
+                        clipBehavior: Clip.none,
+                        child: Center(
+                          child: Image.network(
+                            url,
+                            fit: BoxFit.contain,
+                            gaplessPlayback: true,
+                          ),
+                        ),
                       ),
                     ),
                   ),
                   Positioned(
-                    right: 8,
-                    top: 8,
+                    top: MediaQuery.of(context).padding.top + 12,
+                    right: 16,
                     child: IconButton(
                       icon: const Icon(Icons.close, color: Colors.white),
                       onPressed: () => Navigator.of(context).pop(),
@@ -825,14 +891,6 @@ class _DetailPageState extends State<DetailPage> {
     final premiumProvider = context.watch<PremiumProvider>();
     final bool isPremium = premiumProvider.isPremium;
 
-    // 見出し共通スタイル
-    const headerStyle = TextStyle(
-      color: Colors.white,
-      fontSize: 20,
-      fontWeight: FontWeight.bold,
-      shadows: [Shadow(color: Colors.cyan, blurRadius: 6)],
-    );
-
     return BaseScaffold(
       title: '問題の詳細',
       currentIndex: widget.currentIndex,
@@ -919,6 +977,7 @@ class _DetailPageState extends State<DetailPage> {
               if (mgDyn is List) {
                 for (final g in mgDyn) {
                   if (g is Map) {
+                    // displayTiles は従来通り
                     if (g['displayTiles'] is List) {
                       final disp = (g['displayTiles'] as List)
                           .map((e) => e?.toString() ?? '')
@@ -932,28 +991,26 @@ class _DetailPageState extends State<DetailPage> {
                           .toList();
                       if (disp.isNotEmpty) meldDisplayGroups.add(disp);
                     }
+
+                    // ✅ restoreTiles がある時だけ「手牌から除去」候補にする
                     if (g['restoreTiles'] is List) {
                       final rt = (g['restoreTiles'] as List)
                           .map((e) => e?.toString() ?? '')
                           .where((e) => e.isNotEmpty)
                           .toList();
                       if (rt.isNotEmpty) meldRestoreGroups.add(rt);
-                    } else if (g['tiles'] is List) {
-                      final rt = (g['tiles'] as List)
-                          .map((e) => e?.toString() ?? '')
-                          .where((e) => e.isNotEmpty && e != '0')
-                          .take(3)
-                          .toList();
-                      if (rt.isNotEmpty) meldRestoreGroups.add(rt);
                     }
+
+                    // 🚫 ここ（g['tiles'] から take(3) して restore扱い）をやめる
+                    // else if (g['tiles'] is List) { ... }
                   }
                 }
               }
 
               // 副露消費後の手牌（実際に選べるのはこれ）
-              final List<String> handForChoice = _applyMeldRemovals(
-                tiles,
-                meldRestoreGroups,
+              final List<String> handForChoice = _computeHandForChoice(
+                baseTiles: tiles,
+                meldRestoreGroups: meldRestoreGroups,
               );
 
               final String description =
@@ -1008,34 +1065,46 @@ class _DetailPageState extends State<DetailPage> {
                     _showResults.value = true;
 
                     final a = mySnap.data!.data()!;
-                    final prevTile = (a['tile'] as String?) ?? '';
-                    final prevComment = (a['comment'] as String?) ?? '';
-                    final prevReach = a['reach'];
-                    final prevCall = a['call'];
+
+                    final prevTile = (a['tile'] as String?)?.trim() ?? '';
                     final prevCallTilesRaw =
                         (a['callTiles'] as List?) ?? const [];
-                    final prevCallTiles = prevCallTilesRaw
-                        .map((e) => e?.toString() ?? '')
-                        .where((e) => e.isNotEmpty)
-                        .cast<String>()
-                        .toList();
 
-                    if (_selectedTile.value == null && prevTile.isNotEmpty) {
-                      _selectedTile.value = prevTile;
+                    // callTiles(文字列) → indexへ復元（重複牌は「未使用の個体」を順に割当て）
+                    final used = <int>{};
+                    final List<int> callIdx = [];
+                    for (final t in prevCallTilesRaw.map(
+                      (e) => e?.toString() ?? '',
+                    )) {
+                      if (t.isEmpty) continue;
+                      for (int i = 0; i < handForChoice.length; i++) {
+                        if (used.contains(i)) continue;
+                        if (handForChoice[i] == t) {
+                          used.add(i);
+                          callIdx.add(i);
+                          break;
+                        }
+                      }
                     }
-                    if (_reach.value == null && prevReach is bool) {
-                      _reach.value = prevReach;
+
+                    if (_selectedCallTileIndices.value.isEmpty &&
+                        callIdx.isNotEmpty) {
+                      _selectedCallTileIndices.value = callIdx;
                     }
-                    if (_call.value == null && prevCall is bool) {
-                      _call.value = prevCall;
-                    }
-                    if (_selectedCallTiles.value.isEmpty &&
-                        prevCallTiles.isNotEmpty) {
-                      _selectedCallTiles.value = prevCallTiles;
-                    }
-                    if (commentController.text.isEmpty &&
-                        prevComment.isNotEmpty) {
-                      commentController.text = prevComment;
+
+                    // tile(文字列) → indexへ復元（副露に使った個体は除外して探す）
+                    if (_selectedTileIndex.value == null &&
+                        prevTile.isNotEmpty) {
+                      final exclude = callIdx.toSet();
+                      int? found;
+                      for (int i = 0; i < handForChoice.length; i++) {
+                        if (exclude.contains(i)) continue;
+                        if (handForChoice[i] == prevTile) {
+                          found = i;
+                          break;
+                        }
+                      }
+                      _selectedTileIndex.value = found;
                     }
                   }
 
@@ -1056,89 +1125,114 @@ class _DetailPageState extends State<DetailPage> {
                   }
 
                   // 牌選択ブロック（手牌＋右側に小さな副露表示を同一行に）
-                  Widget buildTileSelector() => Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('どれを切る？', style: headerStyle),
-                      const SizedBox(height: 12),
-                      if (tiles.isEmpty)
-                        const Text(
-                          '選択肢の牌が未設定です',
-                          style: TextStyle(color: Colors.white70),
-                        )
-                      else
-                        ValueListenableBuilder<String?>(
-                          valueListenable: _selectedTile,
-                          builder: (context, sel, _) {
-                            final selector = Row(
-                              crossAxisAlignment:
-                                  CrossAxisAlignment.end, // ★底辺そろえ
-                              children: [
-                                // 左：手牌
-                                Expanded(
-                                  child: Row(
-                                    crossAxisAlignment: CrossAxisAlignment.end,
-                                    children: tiles.map((tileId) {
-                                      final isSelected = sel == tileId;
-                                      return Expanded(
-                                        child: GestureDetector(
-                                          onTap: () async {
-                                            await _playSE();
-                                            _selectedTile.value = (isSelected
-                                                ? null
-                                                : tileId);
+                  Widget buildTileSelector() {
+                    return ValueListenableBuilder<bool?>(
+                      valueListenable: _call,
+                      builder: (context, callValue, _) {
+                        return ValueListenableBuilder<List<int>>(
+                          valueListenable: _selectedCallTileIndices,
+                          builder: (context, callIdx, __) {
+                            final exclude =
+                                (postType == '副露判断' && callValue == true)
+                                ? callIdx.toSet()
+                                : <int>{};
+
+                            // ✅ もし打牌が「副露に使う個体」と衝突したら解除
+                            final curSel = _selectedTileIndex.value;
+                            if (curSel != null && exclude.contains(curSel)) {
+                              _selectedTileIndex.value = null;
+                            }
+
+                            return ValueListenableBuilder<int?>(
+                              valueListenable: _selectedTileIndex,
+                              builder: (context, selIdx, ___) {
+                                final selector = Row(
+                                  crossAxisAlignment: CrossAxisAlignment.end,
+                                  children: [
+                                    Expanded(
+                                      child: Row(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.end,
+                                        children: List.generate(
+                                          handForChoice.length,
+                                          (i) {
+                                            final tileId = handForChoice[i];
+                                            final isSelected = (selIdx == i);
+                                            final isExcluded = exclude.contains(
+                                              i,
+                                            );
+
+                                            return Expanded(
+                                              child: GestureDetector(
+                                                onTap: isExcluded
+                                                    ? null
+                                                    : () async {
+                                                        await _playSE();
+                                                        _selectedTileIndex
+                                                            .value = isSelected
+                                                            ? null
+                                                            : i;
+                                                      },
+                                                child: Opacity(
+                                                  opacity: isExcluded
+                                                      ? 0.35
+                                                      : 1.0,
+                                                  child: Container(
+                                                    decoration: BoxDecoration(
+                                                      border: Border(
+                                                        bottom: BorderSide(
+                                                          color: isSelected
+                                                              ? Colors
+                                                                    .cyanAccent
+                                                              : Colors
+                                                                    .transparent,
+                                                          width: 3,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                    child: AspectRatio(
+                                                      aspectRatio: 2 / 3,
+                                                      child: Align(
+                                                        alignment: Alignment
+                                                            .bottomCenter,
+                                                        child: Image.asset(
+                                                          'assets/tiles/$tileId.png',
+                                                          fit: BoxFit.contain,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                            );
                                           },
-                                          child: Container(
-                                            decoration: BoxDecoration(
-                                              border: Border(
-                                                bottom: BorderSide(
-                                                  color: isSelected
-                                                      ? Colors.cyanAccent
-                                                      : Colors.transparent,
-                                                  width: 3,
-                                                ),
-                                              ),
-                                            ),
-                                            child: AspectRatio(
-                                              aspectRatio: 2 / 3,
-                                              child: Align(
-                                                alignment:
-                                                    Alignment.bottomCenter,
-                                                child: Image.asset(
-                                                  'assets/tiles/$tileId.png',
-                                                  fit: BoxFit.contain,
-                                                ),
-                                              ),
-                                            ),
-                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    if (meldDisplayGroups.isNotEmpty) ...[
+                                      const SizedBox(width: 8),
+                                      _SmallMeldGroupsRow(
+                                        groups: meldDisplayGroups,
+                                      ),
+                                    ],
+                                  ],
+                                );
+
+                                return isPremium
+                                    ? selector
+                                    : AbsorbPointer(
+                                        child: Opacity(
+                                          opacity: 0.95,
+                                          child: selector,
                                         ),
                                       );
-                                    }).toList(),
-                                  ),
-                                ),
-                                // 右：副露（小サイズ）
-                                if (meldDisplayGroups.isNotEmpty) ...[
-                                  const SizedBox(width: 8),
-                                  _SmallMeldGroupsRow(
-                                    groups: meldDisplayGroups,
-                                  ),
-                                ],
-                              ],
+                              },
                             );
-
-                            // 非課金は見せるだけ（タップ無効）
-                            return isPremium
-                                ? selector
-                                : AbsorbPointer(
-                                    child: Opacity(
-                                      opacity: 0.95,
-                                      child: selector,
-                                    ),
-                                  );
                           },
-                        ),
-                    ],
-                  );
+                        );
+                      },
+                    );
+                  }
 
                   return SingleChildScrollView(
                     key: PageStorageKey('detail_scroll_${widget.postId}'),
@@ -1183,7 +1277,20 @@ class _DetailPageState extends State<DetailPage> {
                         FutureBuilder<String?>(
                           future: _resolveImageUrl(),
                           builder: (context, imgSnap) {
-                            Widget _fallbackBox(String text) => Container(
+                            // ★ 画像エリア（グルグル／画像／エラー文言）の描画が始まったタイミングで
+                            // 画面全体ローディングを OFF にする
+                            if (!_imageFinished) {
+                              WidgetsBinding.instance.addPostFrameCallback((_) {
+                                if (!mounted) return;
+                                setState(() => _imageFinished = true);
+                              });
+                            }
+
+                            // ここから下は既存のままで OK
+                            Widget _fallbackBox(
+                              String text, {
+                              bool showSpinner = false,
+                            }) => Container(
                               width: double.infinity,
                               alignment: Alignment.center,
                               padding: const EdgeInsets.all(12),
@@ -1195,21 +1302,45 @@ class _DetailPageState extends State<DetailPage> {
                                 ),
                                 borderRadius: BorderRadius.zero,
                               ),
-                              child: Text(
-                                text,
-                                style: const TextStyle(color: Colors.white70),
-                              ),
+                              child: showSpinner
+                                  ? Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        const SizedBox(
+                                          width: 24,
+                                          height: 24,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 8),
+                                        Text(
+                                          text,
+                                          style: const TextStyle(
+                                            color: Colors.white70,
+                                          ),
+                                        ),
+                                      ],
+                                    )
+                                  : Text(
+                                      text,
+                                      style: const TextStyle(
+                                        color: Colors.white70,
+                                      ),
+                                    ),
                             );
 
-                            // ===== Storage の URL 解決中 =====
                             if (imgSnap.connectionState ==
                                 ConnectionState.waiting) {
-                              return _fallbackBox('読み込み中…');
+                              return _fallbackBox(
+                                '画像を読み込み中…',
+                                showSpinner: true,
+                              );
                             }
 
                             final url = imgSnap.data;
 
-                            // ===== URL が無い場合：画像はこれ以上来ないので完了扱い =====
+                            // URL が無いとき
                             if (url == null || url.isEmpty) {
                               if (!_imageFinished) {
                                 WidgetsBinding.instance.addPostFrameCallback((
@@ -1223,7 +1354,7 @@ class _DetailPageState extends State<DetailPage> {
                               return _fallbackBox('牌姿画像が登録されていません');
                             }
 
-                            // ===== URL が取れた場合：Image.network の描画完了でフラグON =====
+                            // URL が取れたとき：Image.network 側でもローディング中はくるくる表示
                             final bordered = Container(
                               decoration: BoxDecoration(
                                 border: Border.all(
@@ -1256,11 +1387,21 @@ class _DetailPageState extends State<DetailPage> {
                                           }
                                           return child;
                                         }
-                                        // 読み込み中：裏で読み込みだけ進める（表はローディングオーバーレイ）
-                                        return child;
+                                        // ★ ネットワークで画像を取っている最中 → 画像エリアだけスピナー
+                                        return const SizedBox(
+                                          height: 180,
+                                          child: Center(
+                                            child: SizedBox(
+                                              width: 24,
+                                              height: 24,
+                                              child: CircularProgressIndicator(
+                                                strokeWidth: 2,
+                                              ),
+                                            ),
+                                          ),
+                                        );
                                       },
                                   errorBuilder: (ctx, error, stack) {
-                                    // エラーでももうこれ以上は読み込まれないので完了扱い
                                     if (!_imageFinished) {
                                       WidgetsBinding.instance
                                           .addPostFrameCallback((_) {
@@ -1325,12 +1466,13 @@ class _DetailPageState extends State<DetailPage> {
                         if (isPremium)
                           _AnswerTypeCard(
                             postType: postType,
-                            tiles: tiles, // ← どれを切る？と同じ並びを使う
+                            tiles:
+                                handForChoice, // ✅ tiles ではなく handForChoice を渡す（個体indexの母集団）
                             meldDisplayGroups: meldDisplayGroups,
                             reach: _reach,
                             call: _call,
-                            selectedCallTiles: _selectedCallTiles,
-                            selectedTile: _selectedTile,
+                            selectedCallTileIndices: _selectedCallTileIndices,
+                            selectedTileIndex: _selectedTileIndex,
                             onSound: _playSE,
                           )
                         else
@@ -1338,16 +1480,29 @@ class _DetailPageState extends State<DetailPage> {
 
                         // ④ 牌選択（非課金でも表示はするがタップ不可）
                         const SizedBox(height: 20),
+
                         if (postType != '副露判断') ...[
+                          const Text('どれを切る？', style: kSectionHeaderStyle),
+                          const SizedBox(height: 8),
                           buildTileSelector(),
                         ] else ...[
                           ValueListenableBuilder<bool?>(
                             valueListenable: _call,
                             builder: (context, v, _) {
-                              if (v == false) {
-                                return const SizedBox.shrink();
-                              }
-                              return buildTileSelector();
+                              // スルーのときは「切る牌の列」自体を出さない（既存挙動を維持）
+                              if (v == false) return const SizedBox.shrink();
+
+                              return Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text(
+                                    'どれを切る？',
+                                    style: kSectionHeaderStyle,
+                                  ),
+                                  const SizedBox(height: 8),
+                                  buildTileSelector(),
+                                ],
+                              );
                             },
                           ),
                         ],
@@ -1384,7 +1539,9 @@ class _DetailPageState extends State<DetailPage> {
                                   onPressed: () => _submitAnswer(
                                     postType: postType,
                                     isPremium: isPremium,
+                                    handTiles: handForChoice, // ✅ ここ
                                   ),
+
                                   icon: const Icon(Icons.send),
                                   label: const Text('回答する'),
                                   style: ElevatedButton.styleFrom(
@@ -1431,7 +1588,10 @@ class _DetailPageState extends State<DetailPage> {
                             return Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Text('回答集計結果', style: headerStyle),
+                                const Text(
+                                  '回答集計結果',
+                                  style: kSectionHeaderStyle,
+                                ),
                                 const SizedBox(height: 12),
                                 LayoutBuilder(
                                   builder: (context, constraints) {
@@ -1576,7 +1736,10 @@ class _DetailPageState extends State<DetailPage> {
                               children: [
                                 Row(
                                   children: [
-                                    const Text('回答コメント', style: headerStyle),
+                                    const Text(
+                                      '回答コメント',
+                                      style: kSectionHeaderStyle,
+                                    ),
                                     const Spacer(),
                                     const SizedBox(width: 8),
                                     // ソートボタン
@@ -1697,6 +1860,44 @@ List<String> _applyMeldRemovals(
   return hand;
 }
 
+List<String> _computeHandForChoice({
+  required List<String> baseTiles,
+  required List<List<String>> meldRestoreGroups,
+}) {
+  // restore 情報が無いなら「引かない」（Homeと同じ挙動）
+  if (meldRestoreGroups.isEmpty) return List<String>.from(baseTiles);
+
+  final removed = _applyMeldRemovals(baseTiles, meldRestoreGroups);
+
+  // 副露で消費した枚数（通常3枚。kan等が混ざるなら group.length に追従）
+  final consumed = meldRestoreGroups.fold<int>(0, (s, g) => s + g.length);
+
+  // 手牌枚数として自然な候補（自摸番=14、他家番=13 のどちらも許容）
+  final candidates = <int>[
+    14 - consumed,
+    13 - consumed,
+  ].where((n) => n > 0).toList();
+
+  // 候補が作れないなら引かない
+  if (candidates.isEmpty) return List<String>.from(baseTiles);
+
+  int bestDistance(List<String> hand) {
+    final len = hand.length;
+    int best = 1 << 30;
+    for (final c in candidates) {
+      final d = (len - c).abs();
+      if (d < best) best = d;
+    }
+    return best;
+  }
+
+  // 「引かない/引く」どちらが自然な枚数に近いかで決める
+  final dNo = bestDistance(baseTiles);
+  final dRm = bestDistance(removed);
+
+  return (dRm < dNo) ? removed : List<String>.from(baseTiles);
+}
+
 // === どれを切る？右端の小さい副露表示 ===
 class _SmallMeldGroupsRow extends StatelessWidget {
   final List<List<String>> groups;
@@ -1809,12 +2010,16 @@ class _SmallMeldGroupsRow extends StatelessWidget {
 // === 「リーチ判断・副露判断」用のタイプ選択カード ===
 class _AnswerTypeCard extends StatelessWidget {
   final String postType;
-  final List<String> tiles; // 副露判断時の「鳴きに使う候補」
+  final List<String> tiles; // handForChoice（副露判断時の「鳴きに使う候補」）
   final List<List<String>> meldDisplayGroups;
+
   final ValueNotifier<bool?> reach;
   final ValueNotifier<bool?> call;
-  final ValueNotifier<List<String>> selectedCallTiles;
-  final ValueNotifier<String?> selectedTile;
+
+  // ✅ indexで保持（重複牌対策）
+  final ValueNotifier<List<int>> selectedCallTileIndices;
+  final ValueNotifier<int?> selectedTileIndex;
+
   final Future<void> Function() onSound;
 
   const _AnswerTypeCard({
@@ -1823,8 +2028,8 @@ class _AnswerTypeCard extends StatelessWidget {
     required this.meldDisplayGroups,
     required this.reach,
     required this.call,
-    required this.selectedCallTiles,
-    required this.selectedTile,
+    required this.selectedCallTileIndices,
+    required this.selectedTileIndex,
     required this.onSound,
   });
 
@@ -1835,7 +2040,6 @@ class _AnswerTypeCard extends StatelessWidget {
     } else if (postType == '副露判断') {
       return _buildCallCard(context);
     } else {
-      // 通常の「何切る」は追加 UI なし
       return const SizedBox.shrink();
     }
   }
@@ -1847,14 +2051,7 @@ class _AnswerTypeCard extends StatelessWidget {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'リーチしますか？',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
+            const Text('リーチしますか？', style: kSectionHeaderStyle),
             const SizedBox(height: 8),
             Wrap(
               spacing: 8,
@@ -1885,7 +2082,6 @@ class _AnswerTypeCard extends StatelessWidget {
                 ),
               ],
             ),
-            // ← 「※ リーチ判断では〜」の注意書きは削除
           ],
         );
       },
@@ -1899,14 +2095,7 @@ class _AnswerTypeCard extends StatelessWidget {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              '鳴きますか？',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
+            const Text('鳴きますか？', style: kSectionHeaderStyle),
             const SizedBox(height: 8),
             Wrap(
               spacing: 8,
@@ -1921,8 +2110,11 @@ class _AnswerTypeCard extends StatelessWidget {
                   onSelected: (sel) async {
                     await onSound();
                     call.value = sel ? true : null;
+
+                    // ✅ 「鳴く」を解除したら、副露2枚と打牌をクリア
                     if (!sel) {
-                      selectedCallTiles.value = <String>[];
+                      selectedCallTileIndices.value = <int>[];
+                      selectedTileIndex.value = null;
                     }
                   },
                 ),
@@ -1936,8 +2128,11 @@ class _AnswerTypeCard extends StatelessWidget {
                   onSelected: (sel) async {
                     await onSound();
                     call.value = sel ? false : null;
+
+                    // ✅ スルー時は副露2枚も打牌も反映しない
                     if (sel) {
-                      selectedCallTiles.value = <String>[];
+                      selectedCallTileIndices.value = <int>[];
+                      selectedTileIndex.value = null;
                     }
                   },
                 ),
@@ -1946,8 +2141,9 @@ class _AnswerTypeCard extends StatelessWidget {
             const SizedBox(height: 8),
             if (value == true)
               _CallTileSelector(
-                tiles: tiles, // ← ここもさっきの変更でどれを切る？と同じ配列
-                selectedCallTiles: selectedCallTiles,
+                tiles: tiles,
+                selectedCallTileIndices: selectedCallTileIndices,
+                selectedTileIndex: selectedTileIndex,
                 onSound: onSound,
                 meldDisplayGroups: meldDisplayGroups,
               )
@@ -1965,37 +2161,26 @@ class _AnswerTypeCard extends StatelessWidget {
 
 // === 副露に使う 2 枚を選択する UI ===
 class _CallTileSelector extends StatelessWidget {
-  final List<String> tiles;
-  final ValueNotifier<List<String>> selectedCallTiles;
+  final List<String> tiles; // handForChoice
+  final ValueNotifier<List<int>> selectedCallTileIndices;
+  final ValueNotifier<int?> selectedTileIndex; // ✅ 追加：衝突時に打牌を解除
   final Future<void> Function() onSound;
   final List<List<String>> meldDisplayGroups;
 
   const _CallTileSelector({
     required this.tiles,
-    required this.selectedCallTiles,
+    required this.selectedCallTileIndices,
+    required this.selectedTileIndex,
     required this.onSound,
     required this.meldDisplayGroups,
   });
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<List<String>>(
-      valueListenable: selectedCallTiles,
-      builder: (context, selectedList, _) {
-        // ▼ 現在の選択（List<String>）から、どのインデックスが選択されているかを復元する
-        final selectedIndices = <int>{};
-        final used = <int>{};
-
-        for (final tileId in selectedList) {
-          for (int i = 0; i < tiles.length; i++) {
-            if (used.contains(i)) continue;
-            if (tiles[i] == tileId) {
-              used.add(i);
-              selectedIndices.add(i);
-              break;
-            }
-          }
-        }
+    return ValueListenableBuilder<List<int>>(
+      valueListenable: selectedCallTileIndices,
+      builder: (context, selectedIdxList, _) {
+        final selectedSet = selectedIdxList.toSet();
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -2005,101 +2190,84 @@ class _CallTileSelector extends StatelessWidget {
               style: TextStyle(
                 color: Colors.white,
                 fontSize: 13,
-                fontWeight: FontWeight.bold, // ★ 白の太字
+                fontWeight: FontWeight.bold,
               ),
             ),
             const SizedBox(height: 6),
 
-            if (tiles.isEmpty)
-              const Text('選択肢の牌が未設定です', style: TextStyle(color: Colors.white70))
-            else
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  // 左：手牌（どれを切る？と同じ等幅・下端揃え）
-                  Expanded(
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: List.generate(tiles.length, (index) {
-                        final tileId = tiles[index];
-                        final isSelected = selectedIndices.contains(index);
-                        return Expanded(
-                          child: GestureDetector(
-                            onTap: () async {
-                              await onSound();
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Expanded(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: List.generate(tiles.length, (index) {
+                      final tileId = tiles[index];
+                      final isSelected = selectedSet.contains(index);
 
-                              final current = List<String>.from(
-                                selectedCallTiles.value,
-                              );
-                              final tile = tiles[index];
+                      return Expanded(
+                        child: GestureDetector(
+                          onTap: () async {
+                            await onSound();
 
-                              if (isSelected) {
-                                // すでに選択されている → 1 個だけ外す
-                                final removeIdx = current.indexOf(tile);
-                                if (removeIdx != -1) {
-                                  current.removeAt(removeIdx);
-                                }
-                              } else {
-                                // 新しく選択する（最大 2 枚）
-                                if (current.length >= 2) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text('副露牌は最大 2 枚まで選択できます'),
-                                    ),
-                                  );
-                                  return;
-                                }
-                                current.add(tile);
-                              }
+                            final current = List<int>.from(
+                              selectedCallTileIndices.value,
+                            );
 
-                              selectedCallTiles.value = current;
-                            },
-                            child: Container(
-                              decoration: BoxDecoration(
-                                border: Border(
-                                  bottom: BorderSide(
-                                    color: isSelected
-                                        ? Colors.cyanAccent
-                                        : Colors.transparent,
-                                    width: 3,
+                            if (isSelected) {
+                              current.remove(index);
+                            } else {
+                              if (current.length >= 2) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('副露牌は最大 2 枚まで選択できます'),
                                   ),
+                                );
+                                return;
+                              }
+                              current.add(index);
+
+                              // ✅ もし打牌が同じ個体なら解除（打牌に選べない）
+                              if (selectedTileIndex.value == index) {
+                                selectedTileIndex.value = null;
+                              }
+                            }
+
+                            selectedCallTileIndices.value = current;
+                          },
+                          child: Container(
+                            decoration: BoxDecoration(
+                              border: Border(
+                                bottom: BorderSide(
+                                  color: isSelected
+                                      ? Colors.cyanAccent
+                                      : Colors.transparent,
+                                  width: 3,
                                 ),
                               ),
-                              child: AspectRatio(
-                                aspectRatio: 2 / 3,
-                                child: Align(
-                                  alignment: Alignment.bottomCenter,
-                                  child: Image.asset(
-                                    'assets/tiles/$tileId.png',
-                                    fit: BoxFit.contain,
-                                    errorBuilder: (_, __, ___) => Center(
-                                      child: Text(
-                                        tileId,
-                                        style: TextStyle(
-                                          color: isSelected
-                                              ? Colors.cyanAccent
-                                              : Colors.white,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
+                            ),
+                            child: AspectRatio(
+                              aspectRatio: 2 / 3,
+                              child: Align(
+                                alignment: Alignment.bottomCenter,
+                                child: Image.asset(
+                                  'assets/tiles/$tileId.png',
+                                  fit: BoxFit.contain,
                                 ),
                               ),
                             ),
                           ),
-                        );
-                      }),
-                    ),
+                        ),
+                      );
+                    }),
                   ),
-
-                  // 右：既に副露している牌（どれを切る？と同じミニ表示）
-                  if (meldDisplayGroups.isNotEmpty) ...[
-                    const SizedBox(width: 8),
-                    _SmallMeldGroupsRow(groups: meldDisplayGroups),
-                  ],
+                ),
+                if (meldDisplayGroups.isNotEmpty) ...[
+                  const SizedBox(width: 8),
+                  _SmallMeldGroupsRow(groups: meldDisplayGroups),
                 ],
-              ),
+              ],
+            ),
           ],
         );
       },

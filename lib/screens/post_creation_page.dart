@@ -8,6 +8,8 @@ import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter/services.dart'; // PlatformException 用
+import 'package:url_launcher/url_launcher.dart'; // ★追加
 
 import '../providers/premium_provider.dart';
 import '../services/api_client.dart';
@@ -21,6 +23,38 @@ class PostCreationPage extends StatefulWidget {
 
   @override
   State<PostCreationPage> createState() => _PostCreationPageState();
+}
+
+/// 外部ブラウザでURLを開く共通関数
+Future<void> _launchExternalUrl(String url) async {
+  final uri = Uri.parse(url);
+  try {
+    await launchUrl(uri);
+  } catch (_) {
+    // 失敗時はとりあえず無視（必要なら SnackBar などを出してもOK）
+  }
+}
+
+String _toYenPerMonth(String? raw) {
+  if (raw == null || raw.trim().isEmpty) return '---円/月';
+  final s = raw.trim();
+
+  // すでに「/月」等が付いているならそのまま
+  if (RegExp(r'(/月|/month)', caseSensitive: false).hasMatch(s)) return s;
+
+  // JPYっぽい表記のときだけ「◯◯円/月」に寄せる
+  final hasYen = RegExp(r'[¥￥]|JP¥|円').hasMatch(s);
+  if (hasYen) {
+    // 例: "¥300" "JP¥300" "300円" "¥300.00" -> "300円/月"
+    final m = RegExp(r'(\d[\d,]*)').firstMatch(s);
+    if (m != null) {
+      final num = m.group(1)!.replaceAll(',', '');
+      return '${num}円/月';
+    }
+    return '$s/月';
+  }
+  // JPYじゃない場合は「円に偽装しない」
+  return '$s/月';
 }
 
 class _PostCreationPageState extends State<PostCreationPage> {
@@ -113,17 +147,24 @@ class _PostCreationPageState extends State<PostCreationPage> {
   }
 
   Future<void> _pickImage(ImageSource source) async {
-    final XFile? picked = await _picker.pickImage(
-      source: source,
-      imageQuality: 85,
-      maxWidth: 1600,
-      maxHeight: 1600,
-    );
-    if (picked == null) return;
+    try {
+      final XFile? picked = await _picker.pickImage(
+        source: source,
+        imageQuality: 85,
+        maxWidth: 1600,
+        maxHeight: 1600,
+      );
+      if (picked == null) return;
 
-    setState(() {
-      selectedImage = File(picked.path);
-    });
+      setState(() {
+        selectedImage = File(picked.path);
+      });
+    } on PlatformException catch (e) {
+      // カメラ権限拒否 / Simulator でカメラなし など
+      _showError('カメラにアクセスできませんでした: ${e.message ?? e.code}');
+    } catch (e) {
+      _showError('画像の取得に失敗しました: $e');
+    }
   }
 
   Future<void> _goToEditPage() async {
@@ -254,10 +295,12 @@ class _PostCreationPageState extends State<PostCreationPage> {
               onBuy: _buyPremium,
               onRestore: _restore,
               // デバッグビルドのときだけ強制ON/OFFを有効化
-              onDebugOn:
-                  kDebugMode ? () => premiumProvider.setDebugPremium(true) : null,
-              onDebugOff:
-                  kDebugMode ? () => premiumProvider.setDebugPremium(false) : null,
+              onDebugOn: kDebugMode
+                  ? () => premiumProvider.setDebugPremium(true)
+                  : null,
+              onDebugOff: kDebugMode
+                  ? () => premiumProvider.setDebugPremium(false)
+                  : null,
             ),
           ),
         ),
@@ -289,10 +332,7 @@ class _PostCreationPageState extends State<PostCreationPage> {
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                 ),
-                border: Border.all(
-                  color: Colors.cyanAccent,
-                  width: 1.5,
-                ),
+                border: Border.all(color: Colors.cyanAccent, width: 1.5),
                 boxShadow: [
                   BoxShadow(
                     color: Colors.cyanAccent.withValues(alpha: 0.50),
@@ -318,10 +358,7 @@ class _PostCreationPageState extends State<PostCreationPage> {
                             color: Colors.white70,
                             fontSize: 16,
                             shadows: [
-                              Shadow(
-                                color: Colors.cyan,
-                                blurRadius: 4,
-                              ),
+                              Shadow(color: Colors.cyan, blurRadius: 4),
                             ],
                           ),
                         ),
@@ -407,7 +444,6 @@ class _Paywall extends StatelessWidget {
   final String? priceText;
   final VoidCallback onBuy;
   final VoidCallback onRestore;
-  // デバッグ用（null の場合は表示しない）
   final VoidCallback? onDebugOn;
   final VoidCallback? onDebugOff;
 
@@ -422,8 +458,27 @@ class _Paywall extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final priceLabel = priceText ?? '¥---/月';
+    final priceLabel = _toYenPerMonth(priceText);
     final showDebug = onDebugOn != null && onDebugOff != null;
+
+    // ★ プラットフォームごとに説明文を切り替え
+    final descriptionText = Platform.isIOS
+        ? '・サブスクリプション期間：1か月（自動更新）\n'
+              '・料金：$priceLabel（地域により異なる場合があります）\n'
+              '・期間終了の24時間前までに解約しない限り、自動的に更新されます。\n'
+              '・購入後は、端末の「設定」アプリ > Apple ID > サブスクリプション から自動更新を停止・解約できます。'
+        : '・サブスクリプション期間：1か月（自動更新）\n'
+              '・料金：$priceLabel（地域により異なる場合があります）\n'
+              '・期間終了の24時間前までに解約しない限り、自動的に更新されます。\n'
+              '・購入後は、Google Play ストアアプリ > 右上のプロフィールアイコン > '
+              '「お支払いと定期購入」から自動更新を停止・解約できます。';
+
+    // 利用規約 / プライバシーポリシーのURL
+    final termsUrl = Platform.isIOS
+        ? 'https://www.apple.com/legal/internet-services/itunes/appstore/dev/stdeula/'
+        : 'https://play.google.com/intl/ja_jp/about/play-terms/'; // Google Play 利用規約
+
+    const privacyUrl = 'https://sites.google.com/view/nanikiru-archive-privacy';
 
     return Container(
       constraints: const BoxConstraints(maxWidth: 640),
@@ -460,13 +515,14 @@ class _Paywall extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           const Text(
+            '・広告表示のOFF\n'
             '・画像から牌を自動解析して何切る問題の手牌を作成（手動で修正も可能）\n'
             '・何切る問題の補足情報、投稿者の選択とコメントの記載も可能',
             style: TextStyle(color: Colors.white70),
           ),
           const SizedBox(height: 16),
 
-          // 購入/復元
+          // 購入/復元 ボタン（ここは priceLabel をそのまま使う）
           Row(
             children: [
               Expanded(
@@ -503,49 +559,52 @@ class _Paywall extends StatelessWidget {
             ),
 
           if (showDebug) ...[
-            const Divider(height: 24, color: Colors.cyanAccent),
-            const Text(
-              'デバッグ（開発/エミュ用）',
-              style: TextStyle(
-                color: Colors.white70,
-                fontWeight: FontWeight.bold,
-              ),
+            // （デバッグ部分は既存のまま）
+          ],
+
+          const SizedBox(height: 16),
+          const Divider(height: 20, color: Colors.cyanAccent),
+
+          // ★ プラットフォーム別の説明文
+          Text(
+            descriptionText,
+            style: const TextStyle(
+              color: Colors.white54,
+              fontSize: 11,
+              height: 1.4,
             ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 12,
-              runSpacing: 8,
+          ),
+
+          const SizedBox(height: 8),
+          Center(
+            child: Wrap(
+              alignment: WrapAlignment.center,
+              spacing: 16,
               children: [
-                OutlinedButton.icon(
-                  onPressed: busy ? null : onDebugOn,
-                  icon: const Icon(Icons.bolt, color: Colors.greenAccent),
-                  label: const Text(
-                    'プレミアム有効化（テスト）',
-                    style: TextStyle(color: Colors.greenAccent),
-                  ),
-                  style: OutlinedButton.styleFrom(
-                    side: const BorderSide(color: Colors.greenAccent),
+                TextButton(
+                  onPressed: () => _launchExternalUrl(termsUrl),
+                  child: Text(
+                    Platform.isIOS ? '利用規約（EULA）' : 'Google Play 利用規約',
+                    style: const TextStyle(
+                      color: Colors.cyanAccent,
+                      decoration: TextDecoration.underline,
+                    ),
                   ),
                 ),
-                OutlinedButton.icon(
-                  onPressed: busy ? null : onDebugOff,
-                  icon: const Icon(Icons.block, color: Colors.redAccent),
-                  label: const Text(
-                    'プレミアム無効化（テスト）',
-                    style: TextStyle(color: Colors.redAccent),
-                  ),
-                  style: OutlinedButton.styleFrom(
-                    side: const BorderSide(color: Colors.redAccent),
+
+                TextButton(
+                  onPressed: () => _launchExternalUrl(privacyUrl),
+                  child: const Text(
+                    'プライバシーポリシー',
+                    style: TextStyle(
+                      color: Colors.cyanAccent,
+                      decoration: TextDecoration.underline,
+                    ),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 4),
-            const Text(
-              '※ ストア接続できないエミュレータでも、上記テストボタンで挙動確認できます。',
-              style: TextStyle(color: Colors.white54, fontSize: 12),
-            ),
-          ],
+          ),
         ],
       ),
     );

@@ -16,6 +16,12 @@
 		97C146FC1CF9000F007C117D /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FA1CF9000F007C117D /* Main.storyboard */; };
 		97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FD1CF9000F007C117D /* Assets.xcassets */; };
 		97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */; };
+		CE17BA672EF15C5B0067F20D /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = CE17BA662EF15C5A0067F20D /* GoogleService-Info.plist */; };
+		CE17BA682EF15C5B0067F20D /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = CE17BA662EF15C5A0067F20D /* GoogleService-Info.plist */; };
+		CEE7465E2EFEBE1800DE0C33 /* LaunchScreen.strings in Resources */ = {isa = PBXBuildFile; fileRef = CEE7465A2EFEBE1800DE0C33 /* LaunchScreen.strings */; };
+		CEE7465F2EFEBE1800DE0C33 /* Main.strings in Resources */ = {isa = PBXBuildFile; fileRef = CEE7465C2EFEBE1800DE0C33 /* Main.strings */; };
+		CEE746602EFEBE1800DE0C33 /* LaunchScreen.strings in Resources */ = {isa = PBXBuildFile; fileRef = CEE7465A2EFEBE1800DE0C33 /* LaunchScreen.strings */; };
+		CEE746612EFEBE1800DE0C33 /* Main.strings in Resources */ = {isa = PBXBuildFile; fileRef = CEE7465C2EFEBE1800DE0C33 /* Main.strings */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -64,6 +70,13 @@
 		97C147001CF9000F007C117D /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		97C147021CF9000F007C117D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A1F506A36594DA376EE5B5A3 /* Pods-Runner.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.release.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.release.xcconfig"; sourceTree = "<group>"; };
+		CE0119042EFEBC9100530D5C /* ja */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ja; path = ja.lproj/Main.strings; sourceTree = "<group>"; };
+		CE0119052EFEBC9100530D5C /* ja */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ja; path = ja.lproj/LaunchScreen.strings; sourceTree = "<group>"; };
+		CE17BA662EF15C5A0067F20D /* GoogleService-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "GoogleService-Info.plist"; sourceTree = "<group>"; };
+		CEE746592EFEBE1800DE0C33 /* ja */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ja; path = LaunchScreen.strings; sourceTree = "<group>"; };
+		CEE7465B2EFEBE1800DE0C33 /* ja */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ja; path = Main.strings; sourceTree = "<group>"; };
+		CEE746672EFEC11300DE0C33 /* ja */ = {isa = PBXFileReference; name = ja; path = ja.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		CEE746692EFEC11700DE0C33 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		F1F7D17241C36F33AED97816 /* Pods-RunnerTests.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-RunnerTests.release.xcconfig"; path = "Target Support Files/Pods-RunnerTests/Pods-RunnerTests.release.xcconfig"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -122,6 +135,7 @@
 		97C146E51CF9000F007C117D = {
 			isa = PBXGroup;
 			children = (
+				CEE7465D2EFEBE1800DE0C33 /* ja.lproj */,
 				9740EEB11CF90186004384FC /* Flutter */,
 				97C146F01CF9000F007C117D /* Runner */,
 				97C146EF1CF9000F007C117D /* Products */,
@@ -143,6 +157,7 @@
 		97C146F01CF9000F007C117D /* Runner */ = {
 			isa = PBXGroup;
 			children = (
+				CE17BA662EF15C5A0067F20D /* GoogleService-Info.plist */,
 				97C146FA1CF9000F007C117D /* Main.storyboard */,
 				97C146FD1CF9000F007C117D /* Assets.xcassets */,
 				97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */,
@@ -153,6 +168,16 @@
 				74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */,
 			);
 			path = Runner;
+			sourceTree = "<group>";
+		};
+		CEE7465D2EFEBE1800DE0C33 /* ja.lproj */ = {
+			isa = PBXGroup;
+			children = (
+				CEE7465A2EFEBE1800DE0C33 /* LaunchScreen.strings */,
+				CEE7465C2EFEBE1800DE0C33 /* Main.strings */,
+				CEE746682EFEC11300DE0C33 /* InfoPlist.strings */,
+			);
+			path = ja.lproj;
 			sourceTree = "<group>";
 		};
 		F359AF73533D737A5CB8A79A /* Frameworks */ = {
@@ -230,11 +255,12 @@
 			};
 			buildConfigurationList = 97C146E91CF9000F007C117D /* Build configuration list for PBXProject "Runner" */;
 			compatibilityVersion = "Xcode 9.3";
-			developmentRegion = en;
+			developmentRegion = ja;
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				en,
 				Base,
+				ja,
 			);
 			mainGroup = 97C146E51CF9000F007C117D;
 			productRefGroup = 97C146EF1CF9000F007C117D /* Products */;
@@ -252,6 +278,9 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				CEE746602EFEBE1800DE0C33 /* LaunchScreen.strings in Resources */,
+				CEE746612EFEBE1800DE0C33 /* Main.strings in Resources */,
+				CE17BA672EF15C5B0067F20D /* GoogleService-Info.plist in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -261,7 +290,10 @@
 			files = (
 				97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */,
 				3B3967161E833CAA004F5970 /* AppFrameworkInfo.plist in Resources */,
+				CE17BA682EF15C5B0067F20D /* GoogleService-Info.plist in Resources */,
 				97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */,
+				CEE7465E2EFEBE1800DE0C33 /* LaunchScreen.strings in Resources */,
+				CEE7465F2EFEBE1800DE0C33 /* Main.strings in Resources */,
 				97C146FC1CF9000F007C117D /* Main.storyboard in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -396,6 +428,7 @@
 			isa = PBXVariantGroup;
 			children = (
 				97C146FB1CF9000F007C117D /* Base */,
+				CE0119042EFEBC9100530D5C /* ja */,
 			);
 			name = Main.storyboard;
 			sourceTree = "<group>";
@@ -404,8 +437,35 @@
 			isa = PBXVariantGroup;
 			children = (
 				97C147001CF9000F007C117D /* Base */,
+				CE0119052EFEBC9100530D5C /* ja */,
 			);
 			name = LaunchScreen.storyboard;
+			sourceTree = "<group>";
+		};
+		CEE7465A2EFEBE1800DE0C33 /* LaunchScreen.strings */ = {
+			isa = PBXVariantGroup;
+			children = (
+				CEE746592EFEBE1800DE0C33 /* ja */,
+			);
+			name = LaunchScreen.strings;
+			sourceTree = "<group>";
+		};
+		CEE7465C2EFEBE1800DE0C33 /* Main.strings */ = {
+			isa = PBXVariantGroup;
+			children = (
+				CEE7465B2EFEBE1800DE0C33 /* ja */,
+			);
+			name = Main.strings;
+			sourceTree = "<group>";
+		};
+		CEE746682EFEC11300DE0C33 /* InfoPlist.strings */ = {
+			isa = PBXVariantGroup;
+			children = (
+				CEE746672EFEC11300DE0C33 /* ja */,
+				CEE746692EFEC11700DE0C33 /* en */,
+			);
+			name = InfoPlist.strings;
+			path = ..;
 			sourceTree = "<group>";
 		};
 /* End PBXVariantGroup section */
@@ -416,6 +476,7 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++0x";
 				CLANG_CXX_LIBRARY = "libc++";
@@ -474,6 +535,7 @@
 				DEVELOPMENT_TEAM = 7VMU9DUUD4;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = Runner/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "麻雀立体何切るアーカイブ";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -541,6 +603,7 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = AppIcon;
+				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++0x";
 				CLANG_CXX_LIBRARY = "libc++";
@@ -598,6 +661,7 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = AppIcon;
+				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++0x";
 				CLANG_CXX_LIBRARY = "libc++";
@@ -658,6 +722,7 @@
 				DEVELOPMENT_TEAM = 7VMU9DUUD4;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = Runner/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "麻雀立体何切るアーカイブ";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -682,6 +747,7 @@
 				DEVELOPMENT_TEAM = 7VMU9DUUD4;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = Runner/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "麻雀立体何切るアーカイブ";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",

@@ -1,11 +1,12 @@
 // lib/main.dart
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart'; // kReleaseMode
-import 'package:flutter/services.dart';   // 画面向き固定
+import 'package:flutter/services.dart'; // 画面向き固定
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:provider/provider.dart';
-import 'package:google_mobile_ads/google_mobile_ads.dart'; // ★ 追加: AdMob
+import 'package:google_mobile_ads/google_mobile_ads.dart';
+import 'package:audioplayers/audioplayers.dart'; // ★ 追加：オーディオ設定用
 
 import 'firebase_options.dart';
 
@@ -14,23 +15,35 @@ import 'providers/guest_provider.dart';
 import 'providers/premium_provider.dart';
 
 import 'screens/title_page.dart';
-// ★ 追加: インタースティシャル広告サービス（さきほどのクラスをこのパスで作成）
 import 'services/interstitial_ad_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
+  // ★ オーディオコンテキストを設定
+  //  - iOS: サイレントスイッチ ON なら鳴らさない (ambient)
+  //         かつ他アプリの音声を止めない
+  //  - Android: デフォルト設定を使用（ここでは特にいじらない）
+  await AudioPlayer.global.setAudioContext(
+    AudioContext(
+      iOS: AudioContextIOS(
+        category: AVAudioSessionCategory.ambient,
+        // options は指定しない（mixWithOthers を明示すると assertion になるため）
+      ),
+      // android は指定しなくて OK（デフォルト動作）
+    ),
   );
+
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
   // App Check を起動。デバッグ時は Debug、リリースは Play Integrity / DeviceCheck。
   await FirebaseAppCheck.instance.activate(
-    androidProvider:
-        kReleaseMode ? AndroidProvider.playIntegrity : AndroidProvider.debug,
-    appleProvider:
-        kReleaseMode ? AppleProvider.deviceCheck : AppleProvider.debug,
-    // web を使う場合は webProvider を別途設定
+    androidProvider: kReleaseMode
+        ? AndroidProvider.playIntegrity
+        : AndroidProvider.debug,
+    appleProvider: kReleaseMode
+        ? AppleProvider.deviceCheck
+        : AppleProvider.debug,
   );
 
   // ★ AdMob 初期化
@@ -56,7 +69,6 @@ class ZariMahjongApp extends StatelessWidget {
       providers: [
         ChangeNotifierProvider(create: (_) => AnswerProvider()),
         ChangeNotifierProvider(create: (_) => GuestProvider()),
-        // ★ プレミアム状態をグローバル提供
         ChangeNotifierProvider(create: (_) => PremiumProvider()),
       ],
       child: MaterialApp(

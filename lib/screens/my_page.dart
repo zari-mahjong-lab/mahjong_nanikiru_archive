@@ -1,5 +1,6 @@
 // lib/screens/my_page.dart
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
@@ -8,6 +9,7 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
+import 'package:url_launcher/url_launcher.dart'; // ← 追加
 
 import '../providers/guest_provider.dart';
 import '../providers/premium_provider.dart';
@@ -27,6 +29,37 @@ Route<T> _noAnimRoute<T>(Widget page) => PageRouteBuilder<T>(
   reverseTransitionDuration: Duration.zero,
   transitionsBuilder: (_a, _b, _c, child) => child,
 );
+
+/// 外部ブラウザでURLを開く共通関数
+Future<void> _launchExternalUrl(String url) async {
+  final uri = Uri.parse(url);
+  // 外部ブラウザで開く（失敗しても致命的ではないので無視でOK）
+  await launchUrl(uri, mode: LaunchMode.externalApplication);
+}
+
+String _toYenPerMonth(String? raw) {
+  if (raw == null || raw.trim().isEmpty) return '---円/月';
+  final s = raw.trim();
+
+  // すでに「/月」等が付いているならそのまま
+  if (RegExp(r'(/月|/month)', caseSensitive: false).hasMatch(s)) return s;
+
+  // JPYっぽい表記のときだけ「◯◯円/月」に寄せる
+  final hasYen = RegExp(r'[¥￥]|JP¥|円').hasMatch(s);
+  if (hasYen) {
+    // 例: "¥300" "JP¥300" "300円" "¥300.00" -> "300円/月"
+    final m = RegExp(r'(\d[\d,]*)').firstMatch(s);
+    if (m != null) {
+      final num = m.group(1)!.replaceAll(',', '');
+      return '${num}円/月';
+    }
+    return '$s/月';
+  }
+
+  // JPYじゃない場合は「円に偽装しない」(設定ミスが分かるようにする)
+  // 例: "$2.99" -> "$2.99/月"
+  return '$s/月';
+}
 
 class MyPage extends StatefulWidget {
   const MyPage({super.key});
@@ -565,7 +598,7 @@ class _MyPageState extends State<MyPage> {
 }
 
 // ===== 課金カード（本番用）=====
-class _PremiumCard extends StatelessWidget {
+class _PremiumCard extends StatefulWidget {
   final bool isPremium;
   final bool busy;
   final String? priceText;
@@ -581,15 +614,42 @@ class _PremiumCard extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    final priceLabel = priceText ?? '¥---/月';
-    final isFreeTest = kFreePremiumForClosedTest; // ★追加
+  State<_PremiumCard> createState() => _PremiumCardState();
+}
 
+class _PremiumCardState extends State<_PremiumCard>
+    with SingleTickerProviderStateMixin {
+  bool _expanded = false;
+
+  void _toggle() => setState(() => _expanded = !_expanded);
+
+  @override
+  Widget build(BuildContext context) {
+    final priceLabel = _toYenPerMonth(widget.priceText);
+    final isFreeTest = kFreePremiumForClosedTest; // ★クローズドテスト用フラグ
+
+    // Apple への説明用に、サブスクの内容をより詳しく
     final description = isFreeTest
         ? 'クローズドテスト中につき、すべてのユーザーでプレミアム機能を無料開放しています。'
-        : (isPremium
+        : (widget.isPremium
               ? 'プレミアムが有効です。全ての機能をご利用いただけます。'
-              : '画像解析による何切る問題投稿、何切る問題への回答などの機能が開放されます。');
+              : 'プレミアム会員になると、以下の機能が開放されます：\n'
+                    '・アプリ内広告の非表示\n'
+                    '・画像解析を利用した何切る問題の投稿\n'
+                    '・何切る問題への回答および回答結果の詳細表示\n'
+                    '・マイページでの投稿履歴・お気に入り数・いいね数の表示');
+
+    // 利用規約 / プライバシーポリシーのURL
+    final termsUrl = Platform.isIOS
+        ? 'https://www.apple.com/legal/internet-services/itunes/appstore/dev/stdeula/'
+        : 'https://play.google.com/intl/ja_jp/about/play-terms/';
+
+    const privacyUrl = 'https://sites.google.com/view/nanikiru-archive-privacy';
+
+    // 折りたたみ時に右側へ出すステータス（お好みで調整OK）
+    final rightLabel = isFreeTest
+        ? '無料開放中'
+        : (widget.isPremium ? '有効' : priceLabel);
 
     return Container(
       constraints: const BoxConstraints(maxWidth: 560),
@@ -609,58 +669,185 @@ class _PremiumCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(
-            children: [
-              Icon(Icons.workspace_premium, color: Colors.cyanAccent),
-              SizedBox(width: 8),
-              Text(
-                'プレミアム会員プラン',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(description, style: const TextStyle(color: Colors.white70)),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: (isPremium || busy || isFreeTest) ? null : onBuy,
-                  icon: const Icon(Icons.lock_open),
-                  label: Text(
-                    isFreeTest
-                        ? 'クローズドテスト中（自動開放）'
-                        : (isPremium ? '購入済み' : '購入する ($priceLabel)'),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.cyanAccent,
-                    foregroundColor: Colors.black,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              if (!isFreeTest) // ★無料開放中は復元ボタンも隠す
-                OutlinedButton.icon(
-                  onPressed: busy ? null : onRestore,
-                  icon: const Icon(Icons.refresh, color: Colors.cyanAccent),
-                  label: const Text('復元'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.cyanAccent,
-                    side: const BorderSide(
-                      color: Colors.cyanAccent,
-                      width: 1.4,
+          // ===== タイトル行（ここだけ常に表示）=====
+          InkWell(
+            onTap: _toggle,
+            borderRadius: BorderRadius.circular(8),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Row(
+                children: [
+                  const Icon(Icons.workspace_premium, color: Colors.cyanAccent),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'プレミアム会員プラン',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ),
-                ),
-            ],
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: Colors.cyanAccent),
+                      color: Colors.cyanAccent.withValues(alpha: 0.12),
+                    ),
+                    child: Text(
+                      rightLabel,
+                      style: const TextStyle(
+                        color: Colors.cyanAccent,
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  AnimatedRotation(
+                    turns: _expanded ? 0.5 : 0.0, // 180°
+                    duration: const Duration(milliseconds: 180),
+                    child: const Icon(Icons.expand_more, color: Colors.white70),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          // ===== 展開時だけ全内容を表示（プライバシーポリシー含む）=====
+          AnimatedSize(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeInOut,
+            child: _expanded
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const SizedBox(height: 8),
+                      Text(
+                        description,
+                        style: const TextStyle(color: Colors.white70),
+                      ),
+                      const SizedBox(height: 12),
+
+                      Row(
+                        children: [
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              onPressed:
+                                  (widget.isPremium ||
+                                      widget.busy ||
+                                      isFreeTest)
+                                  ? null
+                                  : widget.onBuy,
+                              icon: const Icon(Icons.lock_open),
+                              label: Text(
+                                isFreeTest
+                                    ? 'クローズドテスト中（自動開放）'
+                                    : (widget.isPremium
+                                          ? '購入済み'
+                                          : '購入する ($priceLabel)'),
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.cyanAccent,
+                                foregroundColor: Colors.black,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          if (!isFreeTest)
+                            OutlinedButton.icon(
+                              onPressed: widget.busy ? null : widget.onRestore,
+                              icon: const Icon(
+                                Icons.refresh,
+                                color: Colors.cyanAccent,
+                              ),
+                              label: const Text('復元'),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: Colors.cyanAccent,
+                                side: const BorderSide(
+                                  color: Colors.cyanAccent,
+                                  width: 1.4,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+
+                      const SizedBox(height: 16),
+                      const Divider(color: Colors.cyanAccent, height: 20),
+
+                      // サブスク必須説明
+                      _SubscriptionNoteSection(priceLabel: priceLabel),
+
+                      const SizedBox(height: 8),
+
+                      // 利用規約 / プライバシーポリシー
+                      Center(
+                        child: Wrap(
+                          alignment: WrapAlignment.center,
+                          spacing: 16,
+                          children: [
+                            TextButton(
+                              onPressed: () => _launchExternalUrl(termsUrl),
+                              child: Text(
+                                Platform.isIOS
+                                    ? '利用規約（EULA）'
+                                    : 'Google Play 利用規約',
+                                style: const TextStyle(
+                                  color: Colors.cyanAccent,
+                                  decoration: TextDecoration.underline,
+                                ),
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: () => _launchExternalUrl(privacyUrl),
+                              child: const Text(
+                                'プライバシーポリシー',
+                                style: TextStyle(
+                                  color: Colors.cyanAccent,
+                                  decoration: TextDecoration.underline,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  )
+                : const SizedBox.shrink(),
           ),
         ],
       ),
+    );
+  }
+}
+
+/// サブスクリプションに関する必須説明文
+class _SubscriptionNoteSection extends StatelessWidget {
+  final String priceLabel;
+  const _SubscriptionNoteSection({required this.priceLabel});
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Platform.isIOS
+        ? '・サブスクリプション期間：1か月（自動更新）\n'
+              '・料金：$priceLabel（地域により異なる場合があります）\n'
+              '・期間終了の24時間前までに解約しない限り、自動的に更新されます。\n'
+              '・購入後は、端末の「設定」アプリ > Apple ID > サブスクリプション から自動更新を停止・解約できます。'
+        : '・サブスクリプション期間：1か月（自動更新）\n'
+              '・料金：$priceLabel（地域により異なる場合があります）\n'
+              '・期間終了の24時間前までに解約しない限り、自動的に更新されます。\n'
+              '・購入後は、Google Play ストアアプリ > 右上のプロフィールアイコン > '
+              '「お支払いと定期購入」から自動更新を停止・解約できます。';
+
+    return Text(
+      text,
+      style: const TextStyle(color: Colors.white54, fontSize: 11, height: 1.4),
     );
   }
 }
@@ -710,7 +897,7 @@ class _PremiumDebugCard extends StatelessWidget {
               Icon(Icons.bug_report, color: Colors.greenAccent),
               SizedBox(width: 8),
               Text(
-                'デバッグ用プレミアム切替 (Debug Build Only)',
+                'デバッグ用プレミアム切替',
                 style: TextStyle(
                   color: Colors.greenAccent,
                   fontSize: 14,

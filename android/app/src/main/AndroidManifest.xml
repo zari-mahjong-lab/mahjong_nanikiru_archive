@@ -2,6 +2,7 @@
     package="jp.zari.mahjong_nanikiru_archive">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.CAMERA" />
 
     <application
         android:name="${applicationName}"

@@ -83,8 +83,8 @@ class _BaseScaffoldState extends State<BaseScaffold> {
 
     // ステータスバー高
     final double topInset = MediaQuery.of(context).padding.top;
-    // AppBar 高さ + ステータスバー高 + 余白16
-    final double contentTopPadding = topInset + kToolbarHeight + 16;
+    // AppBar 高さ + ステータスバー高
+    final double contentTopPadding = topInset + kToolbarHeight;
 
     return Scaffold(
       extendBodyBehindAppBar: true,
@@ -124,12 +124,7 @@ class _BaseScaffoldState extends State<BaseScaffold> {
           ),
           // 本文
           Padding(
-            padding: EdgeInsets.only(
-              left: 16,
-              right: 16,
-              top: contentTopPadding,
-              bottom: 16,
-            ),
+            padding: EdgeInsets.only(top: contentTopPadding),
             child: widget.body,
           ),
 

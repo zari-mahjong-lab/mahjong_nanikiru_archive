@@ -5,7 +5,8 @@ import 'package:provider/provider.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:sign_in_with_apple/sign_in_with_apple.dart';
-import 'package:google_sign_in/google_sign_in.dart'; // ★ 追加
+import 'package:google_sign_in/google_sign_in.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../providers/guest_provider.dart';
 import 'my_page.dart';
@@ -17,6 +18,24 @@ class LoginSelectionPage extends StatefulWidget {
   @override
   State<LoginSelectionPage> createState() => _LoginSelectionPageState();
 }
+
+/// 外部ブラウザでURLを開く共通関数
+Future<void> _launchExternalUrl(String url) async {
+  final uri = Uri.parse(url);
+  try {
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  } catch (_) {
+    // 失敗しても致命的ではないので無視（必要ならSnackBarでもOK）
+  }
+}
+
+// 利用規約 / プライバシーポリシー
+final String _termsUrl = (Platform.isIOS || Platform.isMacOS)
+    ? 'https://www.apple.com/legal/internet-services/itunes/appstore/dev/stdeula/'
+    : 'https://play.google.com/intl/ja_jp/about/play-terms/';
+
+const String _privacyUrl =
+    'https://sites.google.com/view/nanikiru-archive-privacy';
 
 class _LoginSelectionPageState extends State<LoginSelectionPage> {
   final AudioPlayer _player = AudioPlayer();
@@ -42,12 +61,13 @@ class _LoginSelectionPageState extends State<LoginSelectionPage> {
   }
 
   void _showError(Object e) {
-    final msg =
-        (e is FirebaseAuthException) ? '${e.code}: ${e.message}' : e.toString();
+    final msg = (e is FirebaseAuthException)
+        ? '${e.code}: ${e.message}'
+        : e.toString();
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('ログインに失敗しました: $msg')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('ログインに失敗しました: $msg')));
   }
 
   // ---------------- Google（Androidはネイティブ経路・ブラウザ非経由） ----------------
@@ -60,9 +80,7 @@ class _LoginSelectionPageState extends State<LoginSelectionPage> {
 
       if (Platform.isAndroid) {
         // ✅ Androidは GoogleSignIn (GMS) を使い、ブラウザのリダイレクトを避ける
-        final gSignIn = GoogleSignIn(
-          scopes: const ['email', 'profile'],
-        );
+        final gSignIn = GoogleSignIn(scopes: const ['email', 'profile']);
 
         // 毎回アカウント選択を出したい場合は silent → signOut
         await gSignIn.signOut();
@@ -76,8 +94,9 @@ class _LoginSelectionPageState extends State<LoginSelectionPage> {
           accessToken: gAuth.accessToken,
         );
 
-        final cred =
-            await FirebaseAuth.instance.signInWithCredential(credential);
+        final cred = await FirebaseAuth.instance.signInWithCredential(
+          credential,
+        );
         await _afterLogin(cred);
         return;
       }
@@ -184,7 +203,7 @@ class _LoginSelectionPageState extends State<LoginSelectionPage> {
                 blurRadius: 12,
                 color: Colors.cyanAccent,
                 offset: Offset(0, 0),
-              )
+              ),
             ],
           ),
         ),
@@ -242,7 +261,7 @@ class _LoginSelectionPageState extends State<LoginSelectionPage> {
                                   blurRadius: 8,
                                   color: Colors.cyan,
                                   offset: Offset(0, 0),
-                                )
+                                ),
                               ],
                             ),
                           ),
@@ -271,7 +290,8 @@ class _LoginSelectionPageState extends State<LoginSelectionPage> {
                                 ? null
                                 : () async {
                                     await _player.play(
-                                        AssetSource('sounds/cyber_click.mp3'));
+                                      AssetSource('sounds/cyber_click.mp3'),
+                                    );
                                     if (!mounted) return;
                                     Navigator.push(
                                       context,
@@ -291,8 +311,46 @@ class _LoginSelectionPageState extends State<LoginSelectionPage> {
                           NeonOutlineButton(
                             icon: Icons.person_outline,
                             label: 'ゲストとして使う',
-                            onPressed:
-                                _busy ? null : () => _signInAsGuest(context),
+                            onPressed: _busy
+                                ? null
+                                : () => _signInAsGuest(context),
+                          ),
+
+                          const SizedBox(height: 16),
+                          const Divider(color: Colors.cyanAccent, height: 20),
+
+                          Center(
+                            child: Wrap(
+                              alignment: WrapAlignment.center,
+                              spacing: 16,
+                              runSpacing: 6,
+                              children: [
+                                TextButton(
+                                  onPressed: () =>
+                                      _launchExternalUrl(_termsUrl),
+                                  child: Text(
+                                    (Platform.isIOS || Platform.isMacOS)
+                                        ? '利用規約（EULA）'
+                                        : 'Google Play 利用規約',
+                                    style: const TextStyle(
+                                      color: Colors.cyanAccent,
+                                      decoration: TextDecoration.underline,
+                                    ),
+                                  ),
+                                ),
+                                TextButton(
+                                  onPressed: () =>
+                                      _launchExternalUrl(_privacyUrl),
+                                  child: const Text(
+                                    'プライバシーポリシー',
+                                    style: TextStyle(
+                                      color: Colors.cyanAccent,
+                                      decoration: TextDecoration.underline,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
 
                           if (_busy) ...[
@@ -329,20 +387,12 @@ class _StaticCyberBackground extends StatelessWidget {
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [
-              Color(0xFF020B0E),
-              Color(0xFF01080A),
-              Color(0xFF000507),
-            ],
+            colors: [Color(0xFF020B0E), Color(0xFF01080A), Color(0xFF000507)],
           ),
         ),
         foregroundDecoration: BoxDecoration(
           gradient: LinearGradient(
-            colors: [
-              Colors.white12,
-              Colors.transparent,
-              Colors.white12,
-            ],
+            colors: [Colors.white12, Colors.transparent, Colors.white12],
             stops: const [0.25, 0.5, 0.75],
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
@@ -387,16 +437,9 @@ class _GlassCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: const Color(0xCC0B1114),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: Colors.cyanAccent.withOpacity(0.6),
-          width: 1,
-        ),
+        border: Border.all(color: Colors.cyanAccent.withOpacity(0.6), width: 1),
         boxShadow: const [
-          BoxShadow(
-            color: Color(0x8020FFFF),
-            blurRadius: 24,
-            spreadRadius: 1,
-          )
+          BoxShadow(color: Color(0x8020FFFF), blurRadius: 24, spreadRadius: 1),
         ],
       ),
       child: child,
@@ -428,7 +471,7 @@ class NeonButton extends StatelessWidget {
                 ? const [Color(0xFF00FFF0), Color(0xFF00B7FF)]
                 : [
                     Colors.cyanAccent.withOpacity(0.4),
-                    Colors.blue.withOpacity(0.4)
+                    Colors.blue.withOpacity(0.4),
                   ],
           ),
           borderRadius: BorderRadius.circular(12),
@@ -438,7 +481,7 @@ class NeonButton extends StatelessWidget {
                     color: Color(0x8020FFFF),
                     blurRadius: 20,
                     spreadRadius: 1,
-                  )
+                  ),
                 ]
               : const [],
         ),
@@ -491,7 +534,7 @@ class NeonOutlineButton extends StatelessWidget {
                     color: Color(0x8020FFFF),
                     blurRadius: 14,
                     spreadRadius: 0.5,
-                  )
+                  ),
                 ]
               : const [],
         ),
